@@ -59,7 +59,7 @@ Qt 启动 API 时设置 `NODE_ENV=production`、`HOSTNAME=0.0.0.0`、`PORT=43127
 
 ```powershell
 ./desktop/scripts/smoke.ps1 `
-  -Installer desktop/dist/shunshoupai-desktop-v1.2.0-setup.exe `
+  -Installer desktop/dist/shunshoupai-desktop-v1.3.0-setup.exe `
   -TestRoot "$env:TEMP/shunshoupai-installer-smoke-new"
 ```
 

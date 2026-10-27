@@ -1,7 +1,10 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <color name="accent">#E9795B</color>
-    <color name="background">#F6F7F9</color>
-    <color name="ink">#292B32</color>
-    <color name="muted">#747D8B</color>
+    <color name="accent">#0B57D0</color>
+    <color name="background">#F8FAFD</color>
+    <color name="ink">#202124</color>
+    <color name="muted">#5F6368</color>
+    <color name="surface">#FFFFFF</color>
+    <color name="tonal">#D3E3FD</color>
+    <color name="outline">#DDE3ED</color>
 </resources>

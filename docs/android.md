@@ -1,49 +1,58 @@
-# Android 客户端
+# Android 客户端（v1.3.0）
 
-[下载 v1.2.0 APK](https://github.com/G-E-E-D/shunshoupai/releases/download/v1.2.0/shunshoupai-android-v1.2.0.apk) · [发布页](https://github.com/G-E-E-D/shunshoupai/releases/tag/v1.2.0)
+[下载 APK](https://github.com/G-E-E-D/shunshoupai/releases/download/v1.3.0/shunshoupai-android-v1.3.0.apk) · [发布页](https://github.com/G-E-E-D/shunshoupai/releases/tag/v1.3.0)
 
-## Java 工程中的 C++ 核心
+## 恢复纯 Java，保留新功能
 
-本版在现有 Java Android 工程上重构，不另建一套 Qt 安卓应用。Java 保留 Activity、WebView、系统权限、相机和 ZXing 入口；NDK / JNI 把真实运行中的连接地址规范化、同源校验和扫码登录协议交给 `shared/core/connection.cpp`。
+本版以最初 Java 工程为基线，移除 Android 的 NDK、JNI、C++ 动态库和 CMake 配置。服务地址规范化、同源判断、扫码协议、Activity、相机、Cookie 与 WebView 生命周期均由 Java 处理。保留个人模型、固定提示词、扫码自动登录和日程同步。
 
-`ServerAddress.normalize/sameOrigin` 和 `ScannedConnection` 直接调用 `NativeCore`，C++ 结果决定手工连接、扫码连接、WebView 导航和外部地址处理。桌面 Qt 也使用同一 C++ 核心。这不是整个应用或服务端都改写为 C++：日程界面仍在应用内 WebView 中，模型和数据库业务仍在共用服务端。
+应用 ID 仍为 `com.shunshoupai.app`，versionName 为 1.3.0、versionCode 为 4；沿用正式签名，可覆盖 1.1.0 / 1.2.0 安装，保留应用数据。最低 Android 8.0 / API 26；桌面端继续使用原生 C++ / Qt。
 
-APK 包含 arm64-v8a、armeabi-v7a 和 x86_64 原生库，支持 Android 8.0 / API 26 及以上。应用 ID 为 `com.shunshoupai.app`，v1.2.0 的 versionCode 为 3，与 v1.1.0 使用相同正式签名，支持覆盖升级。
+## 扫码后白页的处理
 
-## 安装和扫码登录
+用户反馈红米 K80 / Android 16 在 1.2.0 扫码后白页，而 1.1.0 正常。当前没有该实体设备的远程调试记录，不能把具体故障直接归因于 C++ 或宣称已在 K80 真机复现。
+
+已确认并可用自动化复现的缺陷：旧版在进度 100% 或 `onPageFinished` 时撤销加载超时；HTTP 200 空文档、界面未完成初始化或未绘制都可能被误当作成功，持续留在白页。
+
+本版：
+
+- 普通扫码切换复用原 XML WebView，避免相机返回时重建显示上下文。
+- 使用显式 `/mobile` 入口，不依赖手机厂商对 User-Agent 的处理。
+- 显示原生加载面板，等待界面初始化和可绘制帧后才撤下。
+- 空页或加载异常保留超时保护，显示原生错误及重试；可切换软件兼容渲染。
+- 旧服务没有 `/mobile` 时，仅在同来源 404 回退根入口一次；令牌只短暂保留在内存，不放入查询参数或偏好存储。
+- 返回前台、刷新、同来源重新扫码、渲染进程异常都有恢复路径。
+
+K80 的具体系统渲染兼容性仍需安装新版后实机复验。请优先一起更新桌面端和 APK，以获得完整功能；旧服务仅兼容其已有接口。
+
+## 安装、连接与登录
 
 1. 电脑安装并打开 [Qt 桌面客户端](desktop.md)，注册或登录自己的账号。
-2. 手机安装 APK，电脑和手机连接同一可信 Wi-Fi。
-3. 电脑点击“手机扫码登录”，选择手机可访问的局域网地址，如 `http://192.168.1.20:43127`，生成登录码。
-4. 安卓首页点击“扫码连接”，允许相机，扫描电脑上的码，自动连接并登录当前电脑账号。
-5. 使用同一账号查看日程，修改或保存后另一端前台约 8 秒补拉，也可手动刷新。
+2. 手机安装 APK，两台设备连接同一可信 Wi-Fi。
+3. 电脑点击“手机登录”，选择可访问的局域网地址，例如 `http://192.168.1.20:43127`，生成一次性码。
+4. 安卓点击“扫码连接”，允许相机并扫描，自动登录同一账号。
+5. 保持电脑应用运行，允许可信局域网访问端口 43127。原生工具栏可以返回、刷新和修改服务地址。
 
-登录码有效 90 秒、只可使用一次，是临时授权凭据，请勿截图转发。扫码 token 在 URL fragment 中短暂传递，兑换后立即清除，不写入 SharedPreferences。C++ 将服务根地址与 token 分开处理；普通地址二维码仍支持只连接、再手工登录。
+登录码有效 90 秒、只可使用一次，是短期登录凭据，不要截图转发。普通地址二维码仍可只连接，再使用密码登录；没有相机或拒绝权限时可手工填写服务地址。手机的 localhost 指手机本身，不能代替电脑 IP。
 
-源电脑在未兑换前退出登录，登录码会失效。本地成功兑换后手机获得独立会话，电脑退出不会强制手机退出。Supabase 模式仅授权至源 access JWT / 会话上限到期，届时重新扫码或使用密码登录。
+切换服务先确认并清理原站点 Cookie / 网页存储。同来源扫码也会切换至本次授权账号；扫码 token 不进入 SharedPreferences 或 Activity 保存状态。
 
-切换服务会先确认并清理原站点 Cookie 和网页存储；同一来源的扫码授权也会清理旧登录状态，确保使用本次扫描账号。取消扫码、拒绝相机权限或没有相机时可继续手工输入地址。
+本地兑换获得独立 7 天会话；Supabase 只授权至源 access JWT / 会话上限到期，届时重新扫码或密码登录，不复制 refresh token。模型设置中的 Base URL 是服务商接口，安卓连接设置中的地址是顺手排服务，两者用途不同。
 
-## 手工连接
+## 原生与应用内界面
 
-填写顺手排服务的 HTTP(S) 根地址，不是模型 API 的 Base URL。安装版桌面默认端口为 43127；源码后端默认 3000。手机上的 localhost 指手机自身，应使用电脑局域网 IP 或公网 HTTPS 地址。
-
-电脑需保持服务运行，并允许可信局域网访问对应端口。公网连接使用 HTTPS；本地 HTTP 仅用于可信局域网。登录后“偏好与账号 → 模型设置”填写自己的模型配置，提示词由服务端固定。仅升级 APK 不会替代已有远程后端升级。
-
-原生工具栏提供返回、刷新、服务设置；断网和加载失败可重试。提醒只在应用页面前台活跃时工作，没有承诺后台或锁屏提醒、离线编辑。
+连接页、加载/错误页和工具栏改为蓝白 Material 风格；WebView 内的日程、登录、模型设置、按钮、日期条和事件卡片同步更新。提醒仍只在页面前台活跃时工作，未提供可靠后台提醒或离线编辑。
 
 ## 从源码构建
 
-要求 JDK 17、Android SDK Platform 36、Build Tools 35.0.0、NDK **28.2.13676358**、CMake 3.22.1。仓库提供 Gradle 8.13 Wrapper 和 AGP 8.13.2。配置本地 Android SDK 路径后：
+需要 JDK 17、Android SDK Platform 36、Build Tools 35.0.0。使用 Gradle 8.13 Wrapper、AGP 8.13.2；**不需要 NDK 或 CMake**。
 
 ```sh
 cd android
 ./gradlew :app:assembleDebug :app:assembleDebugAndroidTest :app:lintDebug
 ```
 
-Windows 可执行 `gradlew.bat`。调试包和发布包证书不同，不能混装覆盖；正式升级应使用 Releases 正式签名 APK。
-
-正式构建通过环境变量读取签名，不在源码保存证书或密码：
+Windows 使用 `gradlew.bat`。正式发布通过环境变量读取签名：
 
 ```text
 ANDROID_KEYSTORE_PATH
@@ -52,10 +61,10 @@ ANDROID_KEY_ALIAS
 ANDROID_KEY_PASSWORD
 ```
 
-设置后运行 `./gradlew :app:assembleRelease :app:lintRelease`。不要提交签名文件、口令、APK、本地数据库或模型密钥。仓库的 [Android CI](../.github/workflows/android.yml)使用加密 Secrets 签名、校验，再运行模拟器。
+设置后运行 `./gradlew :app:assembleRelease :app:lintRelease`。调试包与正式包签名不同，不应混装；正式覆盖升级使用 Releases APK。不要把证书、口令、APK、数据库或模型密钥提交仓库。
 
-## 验证
+## 验证范围
 
-共享 C++ 测试覆盖规范化、默认端口、IPv6、危险协议、凭据、路径/参数、登录码格式和来源越界。Java → JNI → C++ 另有本机实际调用验证。
+本机纯 Java 协议测试覆盖安全来源、IPv6、端口与扫码 token；移动界面集成覆盖显式入口、可交互标记、失败恢复和扫码同账号登录。
 
-设备测试在 Android 15 模拟器上运行，覆盖连接、WebView 约束、断线恢复、真实后端日程读写、模型设置入口、扫码地址结果与同账号一次性登录。真实相机光学识别、实体手机与蜂窝网络需外部环境验证；直接调用扫描结果的测试不等同于相机实测。最终运行结果和下载校验见 [验收记录](acceptance.md)及 Release 附件。
+模拟器回归新增 HTTP 200 空白页面、超时后重试恢复、同来源扫码后返回前台/刷新、WebView 实例保留和旧服务回退。相机 Activity 的进入/退出可以验证生命周期，不能替代实体相机对焦与光学识别。最终设备测试统计见 [验收记录](acceptance.md)。

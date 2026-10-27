@@ -5,12 +5,10 @@ on:
     branches: [main]
     paths:
       - 'android/**'
-      - 'shared/core/**'
       - '.github/workflows/android.yml'
   pull_request:
     paths:
       - 'android/**'
-      - 'shared/core/**'
       - '.github/workflows/android.yml'
   workflow_dispatch:
 
@@ -42,11 +40,9 @@ jobs:
           echo '81a82aaea5abcc8ff68b3dfcb58b3c3c429378efd98e7433460610fecd7ae45f  gradle/wrapper/gradle-wrapper.jar' | sha256sum --check
           test -f "$ANDROID_HOME/platforms/android-36/android.jar"
           test -x "$ANDROID_HOME/build-tools/35.0.0/apksigner"
-          "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" 'ndk;28.2.13676358' 'cmake;3.22.1'
           chmod +x gradlew
           ./gradlew --version
       - name: Compile debug application and instrumentation tests, run Android lint
-        # AGP installs the pinned NDK/CMake packages from accepted SDK licenses.
         run: ./gradlew --no-daemon :app:assembleDebug :app:assembleDebugAndroidTest :app:lintDebug
       - name: Restore release signing key
         if: github.event_name != 'pull_request'
@@ -72,15 +68,15 @@ jobs:
         if: github.event_name != 'pull_request'
         run: |
           mkdir -p release
-          cp app/build/outputs/apk/release/app-release.apk release/shunshoupai-android-v1.2.0.apk
-          "$ANDROID_HOME/build-tools/35.0.0/apksigner" verify --verbose --print-certs release/shunshoupai-android-v1.2.0.apk | tee release/signing-cert.txt
+          cp app/build/outputs/apk/release/app-release.apk release/shunshoupai-android-v1.3.0.apk
+          "$ANDROID_HOME/build-tools/35.0.0/apksigner" verify --verbose --print-certs release/shunshoupai-android-v1.3.0.apk | tee release/signing-cert.txt
           cd release
-          sha256sum shunshoupai-android-v1.2.0.apk > SHA256SUMS.txt
+          sha256sum shunshoupai-android-v1.3.0.apk > SHA256SUMS.txt
           echo 'signed=true' >> "$GITHUB_OUTPUT"
       - uses: actions/upload-artifact@v6
         if: github.event_name != 'pull_request'
         with:
-          name: shunshoupai-android-release-v1.2.0
+          name: shunshoupai-android-release-v1.3.0
           path: android/release/
           if-no-files-found: error
       - uses: actions/upload-artifact@v6
@@ -142,11 +138,10 @@ jobs:
       - uses: actions/download-artifact@v6
         if: needs.build.outputs.signed == 'true'
         with:
-          name: shunshoupai-android-release-v1.2.0
+          name: shunshoupai-android-release-v1.3.0
           path: android/release
       - name: Enable Android emulator acceleration
         run: |
-          "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" 'ndk;28.2.13676358' 'cmake;3.22.1'
           echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
           sudo udevadm control --reload-rules
           sudo udevadm trigger --name-match=kvm

@@ -45,7 +45,7 @@ adb logcat -c
 
 if [ "${HAS_SIGNED_RELEASE:-false}" = 'true' ]; then
   adb logcat -c
-  adb install -r release/shunshoupai-android-v1.2.0.apk
+  adb install -r release/shunshoupai-android-v1.3.0.apk
   adb shell am start -W -n com.shunshoupai.app/.MainActivity | tee "$report_dir/launch.txt"
   grep -q 'Status: ok' "$report_dir/launch.txt"
   # Wait for the actual UI, rather than assuming every cold emulator has drawn
@@ -55,7 +55,7 @@ if [ "${HAS_SIGNED_RELEASE:-false}" = 'true' ]; then
     adb shell pidof com.shunshoupai.app
     adb shell uiautomator dump /sdcard/release-window.xml
     adb pull /sdcard/release-window.xml "$report_dir/window.xml"
-    if grep -q '给日程连个家' "$report_dir/window.xml" \
+    if grep -q 'com.shunshoupai.app:id/server_url' "$report_dir/window.xml" \
         && grep -q 'com.shunshoupai.app:id/connect_button' "$report_dir/window.xml"; then
       break
     fi
@@ -67,7 +67,7 @@ if [ "${HAS_SIGNED_RELEASE:-false}" = 'true' ]; then
     sleep 1
   done
   adb exec-out screencap -p > "$report_dir/screenshot.png"
-  grep -q '给日程连个家' "$report_dir/window.xml"
+  grep -q 'com.shunshoupai.app:id/server_url' "$report_dir/window.xml"
   grep -q 'com.shunshoupai.app:id/connect_button' "$report_dir/window.xml"
   adb logcat -d -b crash > "$report_dir/crashes.txt"
   adb logcat -d -b events -v brief > "$report_dir/events.txt"

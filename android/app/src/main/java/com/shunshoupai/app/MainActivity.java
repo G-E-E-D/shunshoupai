@@ -52,12 +52,14 @@ public final class MainActivity extends ComponentActivity {
     private static final String SERVER_KEY = "server_url";
     private static final String STATE_SERVER = "trusted_server";
     private static final String STATE_ACTIVE = "web_active";
+    private static final String STATE_COMPATIBILITY = "compatibility_rendering";
 
     private final Handler handler = new Handler(Looper.getMainLooper());
     private SharedPreferences preferences;
     private View setupScreen;
     private View webScreen;
     private View errorPanel;
+    private View loadingOverlay;
     private EditText serverInput;
     private TextView connectionError;
     private TextView errorMessage;
@@ -69,6 +71,13 @@ public final class MainActivity extends ComponentActivity {
     private String mainFrameUrl = "";
     private boolean mainFrameFailed;
     private boolean changingServer;
+    private boolean pageReady;
+    private boolean checkingContent;
+    private boolean compatibilityRendering;
+    private boolean clearHistoryOnReady;
+    private boolean tryingLegacyRoot;
+    private String pendingPairingFragment = "";
+    private int loadGeneration;
 
     private final ActivityResultLauncher<ScanOptions> qrScanner = registerForActivityResult(new ScanContract(), result -> {
         if (result.getContents() != null) {
@@ -82,11 +91,12 @@ public final class MainActivity extends ComponentActivity {
     });
 
     private final Runnable loadTimeout = () -> {
-        if (webView != null && progress.getVisibility() == View.VISIBLE) {
+        if (webView != null && !pageReady && !mainFrameFailed) {
             webView.stopLoading();
-            showLoadError(getString(R.string.connection_timeout));
+            showLoadError(getString(R.string.webview_not_ready));
         }
     };
+    private final Runnable contentCheck = this::checkContentReady;
 
     @Override
     protected void onCreate(Bundle state) {
@@ -97,6 +107,7 @@ public final class MainActivity extends ComponentActivity {
         setupScreen = findViewById(R.id.setup_screen);
         webScreen = findViewById(R.id.web_screen);
         errorPanel = findViewById(R.id.error_panel);
+        loadingOverlay = findViewById(R.id.loading_overlay);
         serverInput = findViewById(R.id.server_url);
         connectionError = findViewById(R.id.connection_error);
         errorMessage = findViewById(R.id.error_message);
@@ -104,6 +115,7 @@ public final class MainActivity extends ComponentActivity {
         connectButton = findViewById(R.id.connect_button);
         progress = findViewById(R.id.loading_progress);
         webView = findViewById(R.id.web_view);
+        compatibilityRendering = state != null && state.getBoolean(STATE_COMPATIBILITY, false);
         configureWebView();
 
         connectButton.setOnClickListener(view -> connectFromInput());
@@ -115,7 +127,16 @@ public final class MainActivity extends ComponentActivity {
         findViewById(R.id.toolbar_back).setOnClickListener(view -> navigateBack());
         findViewById(R.id.toolbar_refresh).setOnClickListener(view -> reloadService());
         findViewById(R.id.toolbar_settings).setOnClickListener(view -> showConnectionSettings());
-        findViewById(R.id.error_retry).setOnClickListener(view -> reloadService());
+        findViewById(R.id.error_retry).setOnClickListener(view -> {
+            enableCompatibilityRendering();
+            reloadService();
+        });
+        findViewById(R.id.toolbar_refresh).setOnLongClickListener(view -> {
+            enableCompatibilityRendering();
+            reloadService();
+            Toast.makeText(this, R.string.compatibility_rendering, Toast.LENGTH_SHORT).show();
+            return true;
+        });
         findViewById(R.id.error_settings).setOnClickListener(view -> showConnectionSettings());
         findViewById(R.id.cancel_connection).setOnClickListener(view -> showWebScreen());
         getOnBackPressedDispatcher().addCallback(this, new OnBackPressedCallback(true) {
@@ -128,11 +149,9 @@ public final class MainActivity extends ComponentActivity {
                 serverAddress = ServerAddress.normalize(saved);
                 serverInput.setText(serverAddress);
                 showWebScreen();
-                boolean restored = state != null
-                    && state.getBoolean(STATE_ACTIVE, false)
-                    && serverAddress.equals(state.getString(STATE_SERVER))
-                    && webView.restoreState(state) != null;
-                if (!restored) webView.loadUrl(serverAddress);
+                // Restore the account through HttpOnly cookies and reload the
+                // known application route instead of old browser display state.
+                reloadService();
                 if (state != null && !state.getBoolean(STATE_ACTIVE, true)) showConnectionSettings();
             } catch (IllegalArgumentException error) {
                 preferences.edit().remove(SERVER_KEY).apply();
@@ -194,14 +213,17 @@ public final class MainActivity extends ComponentActivity {
         settings.setSaveFormData(false);
         settings.setSavePassword(false);
         settings.setUserAgentString(settings.getUserAgentString() + " ShunshoupaiAndroid/" + BuildConfig.VERSION_NAME);
+        if (compatibilityRendering) webView.setLayerType(View.LAYER_TYPE_SOFTWARE, null);
         CookieManager.getInstance().setAcceptCookie(true);
         CookieManager.getInstance().setAcceptThirdPartyCookies(webView, false);
         WebView.setWebContentsDebuggingEnabled((getApplicationInfo().flags & ApplicationInfo.FLAG_DEBUGGABLE) != 0);
         webView.setWebChromeClient(new WebChromeClient() {
             @Override public void onProgressChanged(WebView view, int value) {
                 if (view != webView) return;
-                progress.setProgress(value);
-                if (value == 100) progress.setVisibility(View.GONE);
+                // Resource loading at 100% does not prove React hydrated or
+                // produced a visible workbench. Keep the native loader until
+                // the explicit DOM readiness check succeeds.
+                progress.setProgress(pageReady ? 100 : Math.min(value, 95));
             }
 
             @Override public boolean onCreateWindow(WebView view, boolean dialog, boolean userGesture, android.os.Message resultMessage) {
@@ -231,28 +253,46 @@ public final class MainActivity extends ComponentActivity {
                     return;
                 }
                 mainFrameUrl = url.split("#", 2)[0];
+                loadGeneration++;
+                checkingContent = false;
+                pageReady = false;
                 mainFrameFailed = false;
                 errorPanel.setVisibility(View.GONE);
+                loadingOverlay.setVisibility(View.VISIBLE);
                 progress.setProgress(0);
                 progress.setVisibility(View.VISIBLE);
                 handler.removeCallbacks(loadTimeout);
+                handler.removeCallbacks(contentCheck);
                 handler.postDelayed(loadTimeout, 25_000);
+            }
+
+            @Override public void onPageCommitVisible(WebView view, String url) {
+                if (view == webView && !changingServer && ServerAddress.sameOrigin(serverAddress, url)) checkContentReady();
             }
 
             @Override public void onPageFinished(WebView view, String url) {
                 if (view != webView || changingServer || !ServerAddress.sameOrigin(serverAddress, url)) return;
-                handler.removeCallbacks(loadTimeout);
-                progress.setVisibility(View.GONE);
                 CookieManager.getInstance().flush();
-                if (!mainFrameFailed) errorPanel.setVisibility(View.GONE);
+                if (!mainFrameFailed) checkContentReady();
             }
 
             @Override public void onReceivedError(WebView view, WebResourceRequest request, WebResourceError error) {
-                if (view == webView && request.isForMainFrame()) showLoadError(getString(R.string.error_default));
+                if (view == webView && request.isForMainFrame() && currentDocument(request.getUrl().toString())) showLoadError(getString(R.string.error_default));
             }
 
             @Override public void onReceivedHttpError(WebView view, WebResourceRequest request, WebResourceResponse response) {
-                if (view == webView && request.isForMainFrame()) showLoadError(getString(R.string.http_error, response.getStatusCode()));
+                if (view != webView || !request.isForMainFrame() || !currentDocument(request.getUrl().toString())) return;
+                String path = request.getUrl().getPath();
+                if (response.getStatusCode() == 404 && !tryingLegacyRoot && ("/mobile".equals(path) || "/mobile/".equals(path))) {
+                    // Earlier installed desktop versions only serve the app at
+                    // their root. Retry that exact trusted origin once; retain
+                    // this one-use fragment in memory only for this request.
+                    tryingLegacyRoot = true;
+                    view.stopLoading();
+                    loadWorkspaceUrl(serverAddress + pendingPairingFragment);
+                    return;
+                }
+                showLoadError(getString(R.string.http_error, response.getStatusCode()));
             }
 
             @Override public void onReceivedSslError(WebView view, SslErrorHandler sslHandler, SslError error) {
@@ -265,8 +305,11 @@ public final class MainActivity extends ComponentActivity {
 
             @Override public boolean onRenderProcessGone(WebView view, RenderProcessGoneDetail detail) {
                 if (view != webView) return true;
+                compatibilityRendering = true;
+                loadGeneration++;
                 handler.removeCallbacks(loadTimeout);
-                ((ViewGroup) view.getParent()).removeView(view);
+                handler.removeCallbacks(contentCheck);
+                if (view.getParent() instanceof ViewGroup) ((ViewGroup) view.getParent()).removeView(view);
                 view.destroy();
                 webView = null;
                 showLoadError(getString(R.string.webview_crashed));
@@ -354,15 +397,22 @@ public final class MainActivity extends ComponentActivity {
         }
         changingServer = true;
         connectButton.setEnabled(false);
+        loadGeneration++;
+        checkingContent = false;
+        pageReady = false;
+        handler.removeCallbacks(loadTimeout);
+        handler.removeCallbacks(contentCheck);
         if (webView != null) {
             webView.stopLoading();
+            // Keep the XML WebView and avoid replacing its compositor after a
+            // camera round-trip. about:blank terminates the old document before
+            // its account storage is cleared.
+            webView.loadUrl("about:blank");
             webView.clearHistory();
             webView.clearCache(true);
             webView.clearFormData();
-            ((ViewGroup) webView.getParent()).removeView(webView);
-            webView.destroy();
-            webView = null;
         }
+        clearHistoryOnReady = true;
         WebStorage.getInstance().deleteAllData();
         CookieManager.getInstance().removeAllCookies(removed -> {
             if (isFinishing() || isDestroyed()) return;
@@ -414,13 +464,89 @@ public final class MainActivity extends ComponentActivity {
             configureWebView();
         }
         showWebScreen();
-        webView.loadUrl(initialUrl == null ? serverAddress : initialUrl);
+        String fragment = initialUrl != null && initialUrl.contains("#pair=")
+            ? initialUrl.substring(initialUrl.indexOf('#')) : "";
+        pendingPairingFragment = fragment;
+        tryingLegacyRoot = false;
+        loadWorkspaceUrl(serverAddress + "mobile" + fragment);
+    }
+
+    private void loadWorkspaceUrl(String url) {
+        loadGeneration++;
+        mainFrameUrl = url.split("#", 2)[0];
+        pageReady = false;
+        checkingContent = false;
+        mainFrameFailed = false;
+        errorPanel.setVisibility(View.GONE);
+        loadingOverlay.setVisibility(View.VISIBLE);
+        progress.setProgress(0);
+        progress.setVisibility(View.VISIBLE);
+        handler.removeCallbacks(loadTimeout);
+        handler.postDelayed(loadTimeout, 25_000);
+        webView.loadUrl(url);
+    }
+
+    private boolean currentDocument(String url) {
+        return url != null && url.split("#", 2)[0].equals(mainFrameUrl);
+    }
+
+    private void enableCompatibilityRendering() {
+        compatibilityRendering = true;
+        if (webView != null) webView.setLayerType(View.LAYER_TYPE_SOFTWARE, null);
+    }
+
+    private void checkContentReady() {
+        if (webView == null || changingServer || mainFrameFailed || pageReady || checkingContent) return;
+        final WebView expected = webView;
+        final int generation = loadGeneration;
+        if (!ServerAddress.sameOrigin(serverAddress, expected.getUrl())) return;
+        checkingContent = true;
+        try { expected.evaluateJavascript("(function(){"
+            + "if(document.querySelector('[data-shunshoupai-error]'))return 'error';"
+            + "var app=document.querySelector('.app-shell');"
+            + "if(document.documentElement.getAttribute('data-shunshoupai-ready')==='true'&&app&&app.getBoundingClientRect().height>0)return 'ready';"
+            + (tryingLegacyRoot ? "if(app&&app.getBoundingClientRect().height>0){var buttons=app.querySelectorAll('header button');for(var i=0;i<buttons.length;i++){var keys=Object.keys(buttons[i]);for(var j=0;j<keys.length;j++){if(keys[j].indexOf('__reactProps$')===0&&buttons[i][keys[j]]&&typeof buttons[i][keys[j]].onClick==='function')return 'ready'}}}" : "")
+            + "if(!document.querySelector('script[src*=\"_next\"]')&&document.body&&document.body.innerText.trim().length>0)return 'ready';"
+            + "return 'waiting';})()", value -> {
+                checkingContent = false;
+                if (isFinishing() || isDestroyed() || expected != webView || generation != loadGeneration || changingServer || mainFrameFailed) return;
+                if ("\"ready\"".equals(value)) {
+                    // DOM readiness and a drawable WebView frame are separate.
+                    // Keep the visible native loading state until Chromium has
+                    // committed a frame reflecting that DOM (API 23+, min 26).
+                    checkingContent = true;
+                    expected.postVisualStateCallback(generation, new WebView.VisualStateCallback() {
+                        @Override public void onComplete(long requestId) {
+                            checkingContent = false;
+                            if (isFinishing() || isDestroyed() || expected != webView || generation != loadGeneration || changingServer || mainFrameFailed) return;
+                            pageReady = true;
+                            pendingPairingFragment = "";
+                            handler.removeCallbacks(loadTimeout);
+                            handler.removeCallbacks(contentCheck);
+                            progress.setVisibility(View.GONE);
+                            loadingOverlay.setVisibility(View.GONE);
+                            errorPanel.setVisibility(View.GONE);
+                            if (clearHistoryOnReady) { expected.clearHistory(); clearHistoryOnReady = false; }
+                            expected.requestLayout();
+                            expected.invalidate();
+                        }
+                    });
+                } else if ("\"error\"".equals(value)) showLoadError(getString(R.string.webview_not_ready));
+                else { handler.removeCallbacks(contentCheck); handler.postDelayed(contentCheck, 400); }
+            });
+        } catch (IllegalStateException unavailableRenderer) {
+            checkingContent = false;
+            showLoadError(getString(R.string.webview_crashed));
+        }
     }
 
     private void showLoadError(String message) {
         mainFrameFailed = true;
+        pendingPairingFragment = "";
         handler.removeCallbacks(loadTimeout);
+        handler.removeCallbacks(contentCheck);
         progress.setVisibility(View.GONE);
+        loadingOverlay.setVisibility(View.GONE);
         errorMessage.setText(message);
         errorPanel.setVisibility(View.VISIBLE);
     }
@@ -461,12 +587,9 @@ public final class MainActivity extends ComponentActivity {
     @Override protected void onSaveInstanceState(Bundle state) {
         state.putString(STATE_SERVER, serverAddress);
         state.putBoolean(STATE_ACTIVE, webScreen.getVisibility() == View.VISIBLE);
-        // A pairing capability is only for the first load. Never persist it in
-        // Activity restoration state or the remembered service URL.
-        if (webView != null && !serverAddress.isEmpty()) {
-            String current = webView.getUrl();
-            if (current == null || current.indexOf('#') < 0) webView.saveState(state);
-        }
+        state.putBoolean(STATE_COMPATIBILITY, compatibilityRendering);
+        // Reload /mobile using its persistent HttpOnly cookie after recreation.
+        // Never save WebView display state or a one-time QR URL into the Bundle.
         super.onSaveInstanceState(state);
     }
 
@@ -478,14 +601,19 @@ public final class MainActivity extends ComponentActivity {
 
     @Override protected void onResume() {
         super.onResume();
-        if (webView != null && webScreen != null && webScreen.getVisibility() == View.VISIBLE) webView.onResume();
+        if (webView != null && webScreen != null && webScreen.getVisibility() == View.VISIBLE) {
+            webView.onResume();
+            webView.invalidate();
+            webView.requestLayout();
+            checkContentReady();
+        }
     }
 
     @Override protected void onDestroy() {
         handler.removeCallbacksAndMessages(null);
         if (webView != null) {
             webView.stopLoading();
-            ((ViewGroup) webView.getParent()).removeView(webView);
+            if (webView.getParent() instanceof ViewGroup) ((ViewGroup) webView.getParent()).removeView(webView);
             webView.destroy();
         }
         super.onDestroy();

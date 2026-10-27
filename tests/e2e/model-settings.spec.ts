@@ -355,7 +355,7 @@ test("a one-use desktop QR logs a clean mobile client into the same account and 
   try {
     const mobile = await mobileContext.newPage();
     const exchanged = mobile.waitForResponse(r => r.url().endsWith("/api/pairing/redeem"));
-    await mobile.goto(`/#pair=${ticket.token}`);
+    await mobile.goto(`/mobile#pair=${ticket.token}`);
     expect((await exchanged).status()).toBe(200);
     await expect(mobile.locator(".sync-badge")).toHaveText("已同步");
     expect(new URL(mobile.url()).hash).toBe("");

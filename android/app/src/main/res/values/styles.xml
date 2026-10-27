@@ -1,13 +1,29 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <style name="Base.Theme.Shunshoupai" parent="android:style/Theme.Material.Light.NoActionBar">
-        <item name="android:fontFamily">sans</item>
+        <item name="android:fontFamily">sans-serif</item>
         <item name="android:colorAccent">@color/accent</item>
         <item name="android:windowLightStatusBar">true</item>
         <item name="android:statusBarColor">@color/background</item>
-        <item name="android:navigationBarColor">@color/ink</item>
+        <item name="android:navigationBarColor">@color/background</item>
         <item name="android:windowActionModeOverlay">true</item>
         <item name="android:windowBackground">@color/background</item>
     </style>
     <style name="Theme.Shunshoupai" parent="Base.Theme.Shunshoupai" />
+    <style name="ModernActionButton" parent="android:style/Widget.Material.Button">
+        <item name="android:minHeight">54dp</item>
+        <item name="android:background">@drawable/button_background</item>
+        <item name="android:backgroundTint">@null</item>
+        <item name="android:textColor">@color/surface</item>
+        <item name="android:textSize">15sp</item>
+        <item name="android:textAllCaps">false</item>
+        <item name="android:fontFamily">sans-serif-medium</item>
+        <item name="android:paddingHorizontal">20dp</item>
+        <item name="android:paddingVertical">14dp</item>
+        <item name="android:stateListAnimator">@null</item>
+    </style>
+    <style name="ModernTonalButton" parent="ModernActionButton">
+        <item name="android:background">@drawable/tonal_button_background</item>
+        <item name="android:textColor">@color/accent</item>
+    </style>
 </resources>

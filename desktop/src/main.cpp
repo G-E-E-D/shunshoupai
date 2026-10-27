@@ -1,5 +1,6 @@
 #include "backend.h"
 #include "window.h"
+#include "design.h"
 #include "connection.h"
 #include <QApplication>
 #include <QCommandLineParser>
@@ -13,31 +14,20 @@
 
 int main(int argc, char **argv) {
     QApplication app(argc, argv);
-    QApplication::setStyle("Fusion");
-    QPalette light;
-    light.setColor(QPalette::Window, QColor("#f7f7f5"));
-    light.setColor(QPalette::WindowText, QColor("#252b35"));
-    light.setColor(QPalette::Base, Qt::white);
-    light.setColor(QPalette::AlternateBase, QColor("#f0f2f5"));
-    light.setColor(QPalette::Text, QColor("#252b35"));
-    light.setColor(QPalette::Button, Qt::white);
-    light.setColor(QPalette::ButtonText, QColor("#252b35"));
-    light.setColor(QPalette::Highlight, QColor("#dc7849"));
-    light.setColor(QPalette::HighlightedText, Qt::white);
-    light.setColor(QPalette::Disabled, QPalette::Text, QColor("#a1a7af"));
-    light.setColor(QPalette::Disabled, QPalette::ButtonText, QColor("#a1a7af"));
-    app.setPalette(light);
+    Design::apply(app);
     QCoreApplication::setOrganizationName("G-E-E-D");
     QCoreApplication::setApplicationName("Shunshoupai");
-    QCoreApplication::setApplicationVersion("1.2.0");
+    QCoreApplication::setApplicationVersion("1.3.0");
     QCommandLineParser parser;
     parser.setApplicationDescription(QString::fromUtf8("顺手排 · 原生 C++ / Qt 桌面客户端"));
     parser.addHelpOption(); parser.addVersionOption();
     parser.addOption({"backend", "Connect an existing backend instead of starting the bundled one.", "url"});
     parser.addOption({"smoke-test", "Exercise the native client against an isolated test backend."});
+    parser.addOption({"visual-smoke", "Exercise native dialogs and save rendered UI evidence.", "directory"});
     parser.addOption({"screenshot", "Save the native widget screenshot during --smoke-test.", "path"});
     parser.process(app);
-    const bool smoke = parser.isSet("smoke-test");
+    const bool smoke = parser.isSet("smoke-test") || parser.isSet("visual-smoke");
+    if (smoke && !parser.isSet("backend")) return 4;
     QDir().mkpath(appDataDirectory());
     QLockFile lock(appDataDirectory() + "/desktop.lock");
     if (!smoke && !lock.tryLock(50)) {
@@ -65,6 +55,7 @@ int main(int argc, char **argv) {
     catch (const std::invalid_argument &) { return 3; }
     validated.setPath("");
     MainWindow window(validated.toString());
+    if (parser.isSet("visual-smoke")) return window.visualSmoke(parser.value("visual-smoke"));
     if (smoke) {
         if (!parser.isSet("backend")) return 4;
         return window.smokeTest(parser.value("screenshot"));

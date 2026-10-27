@@ -7,7 +7,10 @@ import static org.junit.Assert.assertTrue;
 import static org.junit.Assert.fail;
 
 import android.content.Context;
+import android.app.Activity;
+import android.app.Instrumentation;
 import android.graphics.Bitmap;
+import android.os.ParcelFileDescriptor;
 import android.os.SystemClock;
 import android.util.Log;
 import android.view.View;
@@ -19,6 +22,7 @@ import android.widget.EditText;
 import android.widget.TextView;
 
 import androidx.test.core.app.ActivityScenario;
+import androidx.lifecycle.Lifecycle;
 import androidx.test.ext.junit.runners.AndroidJUnit4;
 import androidx.test.platform.app.InstrumentationRegistry;
 
@@ -50,7 +54,7 @@ import java.util.function.BooleanSupplier;
 import java.util.function.Function;
 import java.util.UUID;
 
-/** Native/JNI fixtures plus real local-backend flows; no external model or cloud. */
+/** Pure Java connection fixtures and real backend flows; no external model or cloud. */
 @RunWith(AndroidJUnit4.class)
 public class ConnectionInstrumentedTest {
     private ActivityScenario<MainActivity> scenario;
@@ -147,6 +151,54 @@ public class ConnectionInstrumentedTest {
                 () -> "Fixture ready".equals(webTitle())
                         && fixture.responses.get() > previousResponses
                         && read(a -> a.findViewById(R.id.error_panel).getVisibility()) != View.VISIBLE);
+    }
+
+    @Test
+    public void emptySuccessfulHttpPageCannotMasqueradeAsReadyAndCompatibilityRetryRecovers() throws IOException {
+        fixture = new HttpFixture();
+        fixture.blankPage = true;
+        fixture.start();
+        scenario = ActivityScenario.launch(MainActivity.class);
+        connect(fixture.origin());
+        waitUntil("The intentionally empty document should finish resource loading",
+                () -> read(a -> ((WebView) a.findViewById(R.id.web_view)).getProgress()) == 100);
+        assertEquals("Resource progress 100 must keep the native loading state until visible content is ready",
+                View.VISIBLE, read(a -> a.findViewById(R.id.loading_progress).getVisibility()).intValue());
+        long deadline = SystemClock.elapsedRealtime() + 30_000;
+        while (SystemClock.elapsedRealtime() < deadline
+                && read(a -> a.findViewById(R.id.error_panel).getVisibility()) != View.VISIBLE) SystemClock.sleep(100);
+        assertEquals("An empty HTTP 200 page must become a native recoverable error, never an endless white screen",
+                View.VISIBLE, read(a -> a.findViewById(R.id.error_panel).getVisibility()).intValue());
+        fixture.blankPage = false;
+        scenario.onActivity(activity -> activity.findViewById(R.id.error_retry).performClick());
+        waitUntil("Compatibility retry should display the recovered document",
+                () -> "Fixture ready".equals(webTitle())
+                        && read(a -> a.findViewById(R.id.error_panel).getVisibility()) != View.VISIBLE
+                        && read(a -> a.findViewById(R.id.loading_progress).getVisibility()) != View.VISIBLE);
+        assertEquals(View.LAYER_TYPE_SOFTWARE,
+                read(a -> ((WebView) a.findViewById(R.id.web_view)).getLayerType()).intValue());
+    }
+
+    @Test
+    public void olderRootOnlyServiceFallsBackOnceWithoutAnEndless404OrBlankScreen() throws IOException {
+        fixture = new HttpFixture();
+        fixture.legacyRootOnly = true;
+        fixture.start();
+        scenario = ActivityScenario.launch(MainActivity.class);
+        connect(fixture.origin());
+        waitUntil("A previous desktop version should load from its root after /mobile returns 404",
+                () -> "Fixture ready".equals(webTitle())
+                        && ServerAddress.normalize(fixture.origin()).equals(read(a -> ((WebView) a.findViewById(R.id.web_view)).getUrl()))
+                        && read(a -> a.findViewById(R.id.loading_progress).getVisibility()) != View.VISIBLE);
+        assertEquals(View.GONE, read(a -> a.findViewById(R.id.error_panel).getVisibility()).intValue());
+        assertTrue("The legacy fallback should actually contact the original root", fixture.responses.get() >= 2);
+        String capability = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
+        scenario.onActivity(activity -> activity.handleScanResult(fixture.origin() + "/#pair=" + capability));
+        waitUntil("The one-time fragment must survive only the same-origin legacy redirect",
+                () -> "true".equals(evaluate("window.receivedFragment==='#pair=" + capability + "' && location.hash===''"))
+                        && read(a -> a.findViewById(R.id.loading_progress).getVisibility()) != View.VISIBLE);
+        Context context = InstrumentationRegistry.getInstrumentation().getTargetContext();
+        assertFalse(context.getSharedPreferences("connection", Context.MODE_PRIVATE).getAll().toString().contains(capability));
     }
 
     @Test
@@ -328,11 +380,96 @@ public class ConnectionInstrumentedTest {
         }) {
             try {
                 ServerAddress.normalize(invalid);
-                fail("The JNI core must reject unsafe or ambiguous addresses");
+                fail("Java validation must reject unsafe or ambiguous addresses");
             } catch (IllegalArgumentException expected) {
-                // The actual shared C++ core refuses these before WebView loads.
+                // Java validation refuses these before WebView loads.
             }
         }
+    }
+
+    @Test
+    public void sameOriginRescanSwitchesAccountUsingTheOriginalWebViewAndSurvivesForegroundAndRefresh() throws Exception {
+        String backend = InstrumentationRegistry.getArguments().getString("backend_url", "");
+        Assume.assumeFalse("Set backend_url for the camera-return regression", backend.isEmpty());
+        String root = ServerAddress.normalize(backend);
+        scenario = ActivityScenario.launch(MainActivity.class);
+        connect(root);
+        waitUntil("The original Java WebView must show a hydrated mobile workspace",
+                () -> "true".equals(evaluate("document.documentElement.getAttribute('data-shunshoupai-ready')==='true'")));
+        WebView original = read(a -> (WebView) a.findViewById(R.id.web_view));
+        PairingGrant first = pairingGrant(root);
+        scenario.onActivity(activity -> activity.handleScanResult(root + "#pair=" + first.token));
+        waitForAccount(first.owner);
+        assertTrue("Scanning must reuse the original XML WebView compositor", original == read(a -> a.findViewById(R.id.web_view)));
+        PairingGrant second = pairingGrant(root);
+        // Exercise the actual ScanContract/CaptureActivity pause/resume path.
+        // Camera decoding itself is not asserted on a camera-less emulator.
+        Instrumentation instrumentation = InstrumentationRegistry.getInstrumentation();
+        ParcelFileDescriptor descriptor = instrumentation.getUiAutomation().executeShellCommand("pm grant com.shunshoupai.app android.permission.CAMERA");
+        try (ParcelFileDescriptor.AutoCloseInputStream permissionOutput = new ParcelFileDescriptor.AutoCloseInputStream(descriptor)) {
+            while (permissionOutput.read() != -1) { /* Wait for grant completion. */ }
+        }
+        Instrumentation.ActivityMonitor cameraMonitor = instrumentation.addMonitor(QrCaptureActivity.class.getName(), null, false);
+        try {
+            scenario.onActivity(activity -> activity.findViewById(R.id.toolbar_settings).performClick());
+            scenario.onActivity(activity -> activity.findViewById(R.id.scan_button).performClick());
+            Activity capture = instrumentation.waitForMonitorWithTimeout(cameraMonitor, 10_000);
+            assertNotNull("The native scan button must launch the real camera Activity", capture);
+            instrumentation.runOnMainSync(capture::finish);
+        } finally { instrumentation.removeMonitor(cameraMonitor); }
+        scenario.onActivity(activity -> activity.handleScanResult(root + "#pair=" + second.token));
+        waitForAccount(second.owner);
+        scenario.moveToState(Lifecycle.State.CREATED);
+        scenario.moveToState(Lifecycle.State.RESUMED);
+        scenario.onActivity(activity -> activity.findViewById(R.id.toolbar_refresh).performClick());
+        waitForAccount(second.owner);
+        assertTrue("Same-service login and foreground return must retain the original WebView",
+                original == read(a -> a.findViewById(R.id.web_view)));
+        assertEquals("true", evaluate("location.pathname==='/mobile' && location.hash===''"));
+        assertEquals(View.GONE, read(a -> a.findViewById(R.id.error_panel).getVisibility()).intValue());
+    }
+
+    private void waitForAccount(String owner) {
+        waitUntil("The newly scanned account should replace the previous cookie and hydrate",
+                () -> "true".equals(evaluate("(function(){if(!window.__rescanFetching){window.__rescanFetching=true;fetch('/api/auth/session',{cache:'no-store'}).then(function(r){return r.json()}).then(function(s){window.__rescanOwner=s.user?s.user.id:'';window.__rescanFetching=false}).catch(function(){window.__rescanFetching=false})}return document.documentElement.getAttribute('data-shunshoupai-ready')==='true' && window.__rescanOwner===" + JSONObject.quote(owner) + "})()"))
+                        && read(a -> a.findViewById(R.id.loading_progress).getVisibility()) != View.VISIBLE);
+    }
+
+    private static final class PairingGrant {
+        final String owner, token;
+        PairingGrant(String owner, String token) { this.owner = owner; this.token = token; }
+    }
+
+    private PairingGrant pairingGrant(String root) throws Exception {
+        HttpURLConnection registering = (HttpURLConnection) new URL(root + "api/auth/register").openConnection();
+        registering.setRequestMethod("POST"); registering.setDoOutput(true);
+        registering.setConnectTimeout(10_000); registering.setReadTimeout(10_000);
+        registering.setRequestProperty("Content-Type", "application/json");
+        JSONObject account = new JSONObject().put("email", "rescan-" + UUID.randomUUID() + "@example.com").put("password", "Rescan-test-only-2026!");
+        registering.getOutputStream().write(account.toString().getBytes(StandardCharsets.UTF_8));
+        assertEquals(200, registering.getResponseCode());
+        String owner;
+        try (BufferedReader reader = new BufferedReader(new InputStreamReader(registering.getInputStream(), StandardCharsets.UTF_8))) {
+            StringBuilder value = new StringBuilder();
+            for (String line; (line = reader.readLine()) != null;) value.append(line);
+            owner = new JSONObject(value.toString()).getJSONObject("user").getString("id");
+        }
+        String cookie = registering.getHeaderField("Set-Cookie").split(";", 2)[0];
+        registering.disconnect();
+        HttpURLConnection issuing = (HttpURLConnection) new URL(root + "api/pairing/issue").openConnection();
+        issuing.setRequestMethod("POST"); issuing.setDoOutput(true);
+        issuing.setConnectTimeout(10_000); issuing.setReadTimeout(10_000);
+        issuing.setRequestProperty("Content-Type", "application/json"); issuing.setRequestProperty("Cookie", cookie);
+        issuing.getOutputStream().write("{}".getBytes(StandardCharsets.UTF_8));
+        assertEquals(200, issuing.getResponseCode());
+        String token;
+        try (BufferedReader reader = new BufferedReader(new InputStreamReader(issuing.getInputStream(), StandardCharsets.UTF_8))) {
+            StringBuilder value = new StringBuilder();
+            for (String line; (line = reader.readLine()) != null;) value.append(line);
+            token = new JSONObject(value.toString()).getString("token");
+        }
+        issuing.disconnect();
+        return new PairingGrant(owner, token);
     }
 
     private void connect(String origin) {
@@ -408,6 +545,8 @@ public class ConnectionInstrumentedTest {
         private ServerSocket server;
         private Thread thread;
         private volatile boolean running;
+        volatile boolean blankPage;
+        volatile boolean legacyRootOnly;
         private int port;
         final AtomicInteger responses = new AtomicInteger();
 
@@ -427,10 +566,11 @@ public class ConnectionInstrumentedTest {
                         for (String line; (line = input.readLine()) != null && !line.isEmpty();) {
                             // Consume request headers before writing a deterministic HTTP response.
                         }
-                        byte[] body = ("<!doctype html><meta charset=utf-8><title>Fixture ready</title>"
-                                + "<h1>Local test fixture</h1><script>localStorage.setItem('fixture','ready')</script>")
+                        boolean missingMobile = legacyRootOnly && request.startsWith("GET /mobile");
+                        byte[] body = (missingMobile ? "<!doctype html><title>Not found</title><body>Not found</body>" : blankPage ? "<!doctype html><title>Empty fixture</title><body></body>" : "<!doctype html><meta charset=utf-8><title>Fixture ready</title>"
+                                + "<h1>Local test fixture</h1><script>window.receivedFragment=location.hash;history.replaceState(null,'',location.pathname);localStorage.setItem('fixture','ready')</script>")
                                 .getBytes(StandardCharsets.UTF_8);
-                        String headers = "HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\n"
+                        String headers = (missingMobile ? "HTTP/1.1 404 Not Found\r\n" : "HTTP/1.1 200 OK\r\n") + "Content-Type: text/html; charset=utf-8\r\n"
                                 + "Cache-Control: no-store\r\nConnection: close\r\nContent-Length: " + body.length + "\r\n\r\n";
                         connection.getOutputStream().write(headers.getBytes(StandardCharsets.US_ASCII));
                         connection.getOutputStream().write(body);

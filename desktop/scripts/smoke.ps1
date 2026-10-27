@@ -58,6 +58,10 @@ try {
     if (!$application.WaitForExit(180000)) { $application.Kill(); throw 'Native API/widget smoke test timed out.' }
     if ($application.ExitCode -ne 0) { throw "Native API/widget smoke test failed ($($application.ExitCode))." }
     if (!(Test-Path -LiteralPath $screenshot) -or (Get-Item -LiteralPath $screenshot).Length -lt 1000) { throw 'Native widget screenshot was not produced.' }
+    $visualDirectory = Join-Path $reports.FullName 'ui'
+    $application = Start-Process -FilePath (Join-Path $installDirectory 'Shunshoupai.exe') -ArgumentList @('--visual-smoke',('"' + $visualDirectory + '"'),'--backend','http://127.0.0.1:43129') -WorkingDirectory $installDirectory -WindowStyle Hidden -PassThru -RedirectStandardOutput (Join-Path $reports.FullName 'visual.log') -RedirectStandardError (Join-Path $reports.FullName 'visual-error.log')
+    if (!$application.WaitForExit(180000)) { $application.Kill(); throw 'Native dialog interaction test timed out.' }
+    if ($application.ExitCode -ne 0) { throw "Native dialog interaction test failed ($($application.ExitCode))." }
     Stop-Process -Id $backend.Id -ErrorAction SilentlyContinue
     $backend.WaitForExit(10000) | Out-Null
 

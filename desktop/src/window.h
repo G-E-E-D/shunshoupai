@@ -14,6 +14,7 @@ class QDateEdit;
 class QComboBox;
 class QVBoxLayout;
 class QTimer;
+class ModernCalendarWidget;
 
 class MainWindow : public QMainWindow {
     ApiClient api;
@@ -21,6 +22,8 @@ class MainWindow : public QMainWindow {
     QJsonObject session;
     QJsonArray events;
     QLabel *accountLabel, *modeLabel, *status, *summary;
+    QLabel *dateHeading;
+    ModernCalendarWidget *miniCalendar;
     QPushButton *accountButton, *modelButton, *phoneButton;
     QTextEdit *composer;
     QLineEdit *search;
@@ -49,4 +52,5 @@ public:
     explicit MainWindow(const QString &origin);
     void initialize();
     int smokeTest(const QString &screenshot);
+    int visualSmoke(const QString &directory);
 };

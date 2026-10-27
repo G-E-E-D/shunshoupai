@@ -13,8 +13,15 @@ public final class ScannedConnection {
     }
 
     public static ScannedConnection parse(String value) {
-        String[] parsed = NativeCore.parseConnection(value, true);
-        boolean pairing = !parsed[1].isEmpty();
-        return new ScannedConnection(parsed[0], pairing ? parsed[0] + "#pair=" + parsed[1] : parsed[0], pairing);
+        java.net.URI uri = ServerAddress.parse(value);
+        String fragment = uri.getRawFragment();
+        if (fragment == null) {
+            String root = ServerAddress.normalize(value);
+            return new ScannedConnection(root, root, false);
+        }
+        if (!fragment.matches("pair=[A-Za-z0-9_-]{43}")) throw new IllegalArgumentException("登录二维码格式无效。");
+        String input = value.trim();
+        String root = ServerAddress.normalize(input.substring(0, input.indexOf('#')));
+        return new ScannedConnection(root, root + "#" + fragment, true);
     }
 }

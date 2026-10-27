@@ -32,7 +32,7 @@ public:
         QNetworkRequest request{QUrl(origin + path)};
         request.setHeader(QNetworkRequest::ContentTypeHeader, "application/json");
         request.setRawHeader("Origin", origin.toUtf8());
-        request.setRawHeader("User-Agent", "ShunshoupaiQt/1.2.0");
+        request.setRawHeader("User-Agent", "ShunshoupaiQt/1.3.0");
         request.setAttribute(QNetworkRequest::RedirectPolicyAttribute, QNetworkRequest::ManualRedirectPolicy);
         request.setTransferTimeout(35000);
         auto *reply = manager.sendCustomRequest(request, method.toUtf8(), method == "GET" ? QByteArray{} : QJsonDocument(body).toJson(QJsonDocument::Compact));

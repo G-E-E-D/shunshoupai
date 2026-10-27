@@ -544,6 +544,10 @@ export default function Dashboard({ initialDay }: { initialDay: string }) {
     setOnline(navigator.onLine);
   }, []);
   useEffect(() => {
+    if (ready) document.documentElement.setAttribute("data-shunshoupai-ready", "true");
+    return () => { document.documentElement.removeAttribute("data-shunshoupai-ready"); };
+  }, [ready]);
+  useEffect(() => {
     userRef.current = userId || null;
     sequence.current++;
     setEvents([]);

@@ -1,12 +1,14 @@
 # 顺手排 · 把想法排进生活
 
-电脑端是 **C++ / Qt Widgets 原生应用**，不使用浏览器或 WebView 作为桌面界面。安卓端沿用现有 Java 工程，通过 NDK / JNI 调用与桌面共用的 C++ 连接核心；安卓日程界面继续使用应用内 WebView。两个客户端访问同一服务，使用同一账号和固定的日程提示词。
+电脑端是 **C++ / Qt Widgets 原生应用**，不使用浏览器或 WebView 作为桌面界面。安卓端恢复纯 Java 工程，已移除 NDK / JNI；保留扫码自动登录、模型设置和应用内 WebView 日程界面。两个客户端访问同一服务，使用同一账号和固定的日程提示词。
 
-[Windows 一键安装 EXE](https://github.com/G-E-E-D/shunshoupai/releases/download/v1.2.0/shunshoupai-desktop-v1.2.0-setup.exe) · [Android APK](https://github.com/G-E-E-D/shunshoupai/releases/download/v1.2.0/shunshoupai-android-v1.2.0.apk) · [发布页](https://github.com/G-E-E-D/shunshoupai/releases/tag/v1.2.0)
+[Windows 一键安装 EXE](https://github.com/G-E-E-D/shunshoupai/releases/download/v1.3.0/shunshoupai-desktop-v1.3.0-setup.exe) · [Android APK](https://github.com/G-E-E-D/shunshoupai/releases/download/v1.3.0/shunshoupai-android-v1.3.0.apk) · [发布页](https://github.com/G-E-E-D/shunshoupai/releases/tag/v1.3.0)
 
-![Qt 原生桌面实际渲染](https://github.com/G-E-E-D/shunshoupai/releases/download/v1.2.0/native-desktop.png)
+![Qt 原生桌面实际渲染](https://github.com/G-E-E-D/shunshoupai/releases/download/v1.3.0/native-desktop.png)
 
 ## 安装后使用
+
+v1.3.0 采用参考 Google 日历的蓝白界面，重做登录/设置弹窗与原生圆形日期选择器。安卓回到纯 Java 实现，修复空页面被误判成功的路径：显示原生加载状态，等待可交互内容和可绘制帧；失败时可重试或切换兼容渲染。建议两端一起更新；新版安卓也能在旧服务没有 `/mobile` 时回退根入口。
 
 1. Windows 运行安装器，打开“顺手排”。安装包包含 Qt 运行库、Node.js 和本地服务，应用会自动启动服务，无需另装 Node。
 2. 点击“登录 / 注册”，注册自己的账号。无预设账号，本地模式不发送验证邮件。
@@ -23,7 +25,7 @@ Windows 数据保存在 `%LOCALAPPDATA%/Shunshoupai/data/`，升级和卸载保�
 | 能力 | 当前行为 |
 | --- | --- |
 | 原生桌面 | C++17 / Qt 6 Widgets、Network；日程整理、草稿确认、日程增删改、完成/恢复、当天/七天、搜索 |
-| 安卓 | Java 平台界面和扫码相机；NDK / JNI C++ 负责地址规范化、同源与扫码登录协议；日程工作台使用 WebView |
+| 安卓 | 纯 Java 平台界面、相机与连接校验；保留扫码登录和 WebView 工作台，新增可见加载、空页超时恢复与兼容渲染 |
 | 个人模型 | 每账号保存兼容 Chat Completions 的 Base URL、模型名和 Key；Key 在服务端 AES-256-GCM 加密，仅读回掩码 |
 | 固定提示词 | `src/lib/parser.ts` 固定日程系统提示词，模型设置接口拒绝提示词覆盖 |
 | 扫码登录 | 高熵一次性码、90 秒有效、数据库原子兑换；二维码 fragment 携带，不含密码、长期会话或模型 Key |
@@ -59,7 +61,7 @@ cmake --build desktop/build --config Release
 desktop/build/Release/Shunshoupai.exe --backend http://127.0.0.1:3000
 ```
 
-Android 使用 JDK 17、Android SDK 36、NDK 28.2.13676358 和仓库内 Gradle Wrapper。Windows 安装器由 NSIS 构建；完整步骤见平台文档。
+Android 使用 JDK 17、Android SDK 36 和仓库内 Gradle Wrapper，不再需要 NDK / CMake。Windows 安装器由 NSIS 构建；完整步骤见平台文档。
 
 ## 服务端配置
 
@@ -85,12 +87,12 @@ npm run test:e2e
 ctest --test-dir desktop/build -C Release --output-on-failure
 ```
 
-Windows CI 真实安装 EXE，验证随包 Node/Qt、原生控件渲染、真实 API、扫码登录、重装/卸载数据保留。Android CI 构建并签名 APK，安装到模拟器并运行 Java/JNI/WebView 联调。测试使用虚构账号和隔离数据库，不调用付费模型。实际结果与外部环境边界见 [验收记录](docs/acceptance.md)。
+Windows CI 真实安装 EXE，验证随包 Node/Qt、原生控件渲染、真实 API、扫码登录、重装/卸载数据保留。Android CI 构建并签名 APK，安装到模拟器并运行纯 Java / WebView 联调与扫码白页恢复回归。测试使用虚构账号和隔离数据库，不调用付费模型。实际结果与外部环境边界见 [验收记录](docs/acceptance.md)。
 
 ```text
 desktop/        C++ / Qt 原生界面、NSIS、Windows 打包与验收
-shared/core/    桌面与 Android JNI 共用的 C++ 连接协议
-android/        现有 Java 工程、NDK / JNI、相机与 WebView
+shared/core/    桌面 C++ 连接协议及其测试
+android/        纯 Java 工程、相机、连接校验与 WebView
 src/app/api/    认证、日程、个人模型、一次性扫码登录
 src/components/ 安卓 WebView 中的日程界面
 src/lib/        规则/模型解析、SQLite / Supabase、保存保护

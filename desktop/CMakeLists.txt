@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.21)
-project(Shunshoupai VERSION 1.2.0 LANGUAGES CXX)
+project(Shunshoupai VERSION 1.3.0 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -14,6 +14,12 @@ qt_add_executable(Shunshoupai WIN32
     src/backend.h
     src/window.h
     src/window.cpp
+    src/dialogs.cpp
+    src/design.cpp
+    src/design.h
+    src/modern_calendar.cpp
+    src/modern_calendar.h
+    src/visual_smoke.cpp
     vendor/qrcodegen.cpp
     vendor/qrcodegen.hpp
     ../shared/core/connection.cpp

@@ -1,10 +1,10 @@
 # Windows 原生桌面端
 
-桌面界面由 C++17 / Qt 6 Widgets 编写，通过 Qt Network 调用共用服务 API，没有嵌入浏览器或 Qt WebEngine。安卓沿用 Java 工程，其 C++ 协议核心与桌面复用。
+桌面界面由 C++17 / Qt 6 Widgets 编写，通过 Qt Network 调用共用服务 API，没有嵌入浏览器或 Qt WebEngine。安卓恢复独立的纯 Java 工程，连接同一服务。
 
 ## 安装与数据
 
-从 [v1.2.0 发布页](https://github.com/G-E-E-D/shunshoupai/releases/tag/v1.2.0)下载 `shunshoupai-desktop-v1.2.0-setup.exe`，双击安装。安装器为当前用户安装，不要求管理员权限，包含 Qt 动态库、Node.js 和应用后端。运行“顺手排”即可自动启动本地服务。
+从 [v1.3.0 发布页](https://github.com/G-E-E-D/shunshoupai/releases/tag/v1.3.0)下载 `shunshoupai-desktop-v1.3.0-setup.exe`，双击安装。安装器为当前用户安装，不要求管理员权限，包含 Qt 动态库、Node.js 和应用后端。运行“顺手排”即可自动启动本地服务。
 
 本地服务监听 43127，桌面使用 127.0.0.1，安卓使用电脑局域网 IP。端口占用时明确报错，不会连接到来源未知的进程。退出桌面应用会结束本次启动的后端；已有其他服务不受影响。
 
