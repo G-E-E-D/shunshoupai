@@ -1,0 +1,3 @@
+# Preserve upstream vendor source and license texts verbatim.
+desktop/vendor/** -whitespace
+desktop/licenses/** -whitespace

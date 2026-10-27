@@ -30,6 +30,8 @@ export interface SessionInfo {
   user: { id: string; email: string } | null;
   mode: "local" | "supabase";
   ai_provider: "model" | "rules";
+  pairing_limited?: boolean;
+  session_expires_at?: string | null;
 }
 export interface ModelSettingsInfo {
   configured: boolean;

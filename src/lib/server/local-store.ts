@@ -77,6 +77,13 @@ export class LocalStore {
         updated_at TEXT NOT NULL, deleted_at TEXT,
         CHECK(deleted_at IS NOT NULL OR (base_url IS NOT NULL AND model IS NOT NULL AND api_key_ciphertext IS NOT NULL AND key_hint IS NOT NULL))
       );
+      CREATE TABLE IF NOT EXISTS pairing_requests (
+        token_hash TEXT PRIMARY KEY,
+        user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        source_session_hash TEXT NOT NULL REFERENCES sessions(token_hash) ON DELETE CASCADE,
+        expires_at INTEGER NOT NULL,
+        consumed_at INTEGER
+      );
     `);
   }
 
@@ -256,6 +263,40 @@ export class LocalStore {
       this.db.prepare(`UPDATE model_settings SET base_url=NULL,model=NULL,api_key_ciphertext=NULL,key_hint=NULL,
         version=version+1,updated_at=?,deleted_at=? WHERE user_id=? AND version=?`).run(now, now, userId, baseVersion);
       return this.modelSetting(userId);
+    });
+  }
+
+  issuePairing(userId: string, sourceToken: string, now = Date.now()): { token: string; expires_at: string } {
+    return this.transaction(() => {
+      const sourceHash = hash(sourceToken);
+      const source = this.db.prepare("SELECT expires_at FROM sessions WHERE token_hash=? AND user_id=? AND expires_at>?")
+        .get(sourceHash, userId, now) as { expires_at: number } | undefined;
+      if (!source) throw new AppError("UNAUTHORIZED", "当前登录已失效，请重新登录后生成二维码。", 401);
+      this.db.prepare("DELETE FROM pairing_requests WHERE expires_at<=?").run(now);
+      this.db.prepare("DELETE FROM pairing_requests WHERE source_session_hash=? AND consumed_at IS NULL").run(sourceHash);
+      const token = randomBytes(32).toString("base64url");
+      const expires = Math.min(source.expires_at, now + 90_000);
+      this.db.prepare("INSERT INTO pairing_requests(token_hash,user_id,source_session_hash,expires_at) VALUES(?,?,?,?)")
+        .run(hash(token), userId, sourceHash, expires);
+      return { token, expires_at: new Date(expires).toISOString() };
+    });
+  }
+
+  redeemPairing(token: string, now = Date.now()): { user: User; session_token: string; session_expires_at: string } {
+    return this.transaction(() => {
+      const pairing = this.db.prepare(`SELECT p.user_id,p.expires_at,p.consumed_at,s.expires_at AS source_expires_at,u.email
+        FROM pairing_requests p JOIN sessions s ON s.token_hash=p.source_session_hash AND s.user_id=p.user_id
+        JOIN users u ON u.id=p.user_id WHERE p.token_hash=?`).get(hash(token)) as {
+          user_id: string; expires_at: number; consumed_at: number | null; source_expires_at: number; email: string;
+        } | undefined;
+      if (!pairing || pairing.consumed_at !== null || pairing.expires_at <= now || pairing.source_expires_at <= now) {
+        throw new AppError("PAIRING_INVALID", "登录二维码已失效或已使用，请在已登录设备重新生成。", 400);
+      }
+      this.db.prepare("UPDATE pairing_requests SET consumed_at=? WHERE token_hash=? AND consumed_at IS NULL").run(now, hash(token));
+      const sessionToken = randomBytes(32).toString("base64url");
+      const sessionExpires = now + 7 * 24 * 60 * 60 * 1000;
+      this.db.prepare("INSERT INTO sessions(token_hash,user_id,expires_at) VALUES(?,?,?)").run(hash(sessionToken), pairing.user_id, sessionExpires);
+      return { user: { id: pairing.user_id, email: pairing.email }, session_token: sessionToken, session_expires_at: new Date(sessionExpires).toISOString() };
     });
   }
 }

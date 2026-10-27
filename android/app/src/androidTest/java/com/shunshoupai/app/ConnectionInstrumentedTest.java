@@ -37,8 +37,10 @@ import java.io.IOException;
 import java.io.InputStreamReader;
 import java.net.InetAddress;
 import java.net.InetSocketAddress;
+import java.net.HttpURLConnection;
 import java.net.ServerSocket;
 import java.net.Socket;
+import java.net.URL;
 import java.nio.charset.StandardCharsets;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -48,7 +50,7 @@ import java.util.function.BooleanSupplier;
 import java.util.function.Function;
 import java.util.UUID;
 
-/** Runs against a tiny device-local HTTP fixture; no cloud, model, or account is needed. */
+/** Native/JNI fixtures plus real local-backend flows; no external model or cloud. */
 @RunWith(AndroidJUnit4.class)
 public class ConnectionInstrumentedTest {
     private ActivityScenario<MainActivity> scenario;
@@ -218,6 +220,23 @@ public class ConnectionInstrumentedTest {
         Context context = InstrumentationRegistry.getInstrumentation().getTargetContext();
         assertFalse("An invalid QR value must not become a remembered service",
                 context.getSharedPreferences("connection", Context.MODE_PRIVATE).contains("server_url"));
+        String capability = android.util.Base64.encodeToString(new byte[32],
+                android.util.Base64.URL_SAFE | android.util.Base64.NO_PADDING | android.util.Base64.NO_WRAP);
+        for (String invalid : new String[] {
+                fixture.origin() + "/#pair=short",
+                fixture.origin() + "/#pair=" + capability + "&extra=1",
+                fixture.origin() + "/nested#pair=" + capability,
+                fixture.origin() + "/?token=other#pair=" + capability,
+                fixture.origin() + "/#other=" + capability
+        }) {
+            scenario.onActivity(activity -> activity.handleScanResult(invalid));
+            assertFalse("Rejected pairing QR data must not be remembered",
+                    context.getSharedPreferences("connection", Context.MODE_PRIVATE).contains("server_url"));
+        }
+        ScannedConnection parsed = ScannedConnection.parse(fixture.origin() + "/#pair=" + capability);
+        assertTrue(parsed.hasPairing);
+        assertEquals(ServerAddress.normalize(fixture.origin()), parsed.serviceRoot);
+        assertEquals(parsed.serviceRoot + "#pair=" + capability, parsed.initialUrl);
         scenario.onActivity(activity -> activity.handleScanResult(fixture.origin()));
         waitUntil("A valid scanned URL should connect without manually retyping it",
                 () -> "Fixture ready".equals(webTitle()));
@@ -227,18 +246,92 @@ public class ConnectionInstrumentedTest {
     }
 
     @Test
+    public void liveBackendPairingQrCreatesSameAccountSessionWithoutTypingPasswordInWebView() throws Exception {
+        String backend = InstrumentationRegistry.getArguments().getString("backend_url", "");
+        Assume.assumeFalse("Set backend_url to run the live pairing integration", backend.isEmpty());
+        String root = ServerAddress.normalize(backend);
+        // This independent HTTP client stands in for the already-authenticated
+        // desktop. Its cookie is never inserted into the Android WebView.
+        HttpURLConnection registration = (HttpURLConnection) new URL(root + "api/auth/register").openConnection();
+        registration.setRequestMethod("POST");
+        registration.setDoOutput(true);
+        registration.setConnectTimeout(10_000);
+        registration.setReadTimeout(10_000);
+        registration.setRequestProperty("Content-Type", "application/json");
+        JSONObject account = new JSONObject().put("email", "pair-android-" + UUID.randomUUID() + "@example.com")
+                .put("password", "Pair-test-only-2026!");
+        registration.getOutputStream().write(account.toString().getBytes(StandardCharsets.UTF_8));
+        assertEquals(200, registration.getResponseCode());
+        JSONObject owner;
+        try (BufferedReader reader = new BufferedReader(new InputStreamReader(registration.getInputStream(), StandardCharsets.UTF_8))) {
+            StringBuilder body = new StringBuilder();
+            for (String line; (line = reader.readLine()) != null;) body.append(line);
+            owner = new JSONObject(body.toString()).getJSONObject("user");
+        }
+        String desktopCookie = registration.getHeaderField("Set-Cookie");
+        assertNotNull("The desktop must have its own session", desktopCookie);
+        desktopCookie = desktopCookie.split(";", 2)[0];
+        registration.disconnect();
+
+        HttpURLConnection issuing = (HttpURLConnection) new URL(root + "api/pairing/issue").openConnection();
+        issuing.setRequestMethod("POST");
+        issuing.setDoOutput(true);
+        issuing.setConnectTimeout(10_000);
+        issuing.setReadTimeout(10_000);
+        issuing.setRequestProperty("Content-Type", "application/json");
+        issuing.setRequestProperty("Cookie", desktopCookie);
+        issuing.getOutputStream().write("{}".getBytes(StandardCharsets.UTF_8));
+        assertEquals(200, issuing.getResponseCode());
+        String token;
+        try (BufferedReader reader = new BufferedReader(new InputStreamReader(issuing.getInputStream(), StandardCharsets.UTF_8))) {
+            StringBuilder body = new StringBuilder();
+            for (String line; (line = reader.readLine()) != null;) body.append(line);
+            token = new JSONObject(body.toString()).getString("token");
+        }
+        issuing.disconnect();
+        assertTrue("The QR contains a bounded random capability", token.matches("[A-Za-z0-9_-]{43}"));
+
+        scenario = ActivityScenario.launch(MainActivity.class);
+        scenario.onActivity(activity -> activity.handleScanResult(root + "#pair=" + token));
+        waitUntil("Scanning the QR should redeem it and show the authenticated workbench",
+                () -> "true".equals(evaluate("Boolean(document.querySelector('header button[aria-label=\"打开账号设置\"]'))")));
+        evaluate("window.__androidPairingCheck=null; fetch('/api/auth/session',{cache:'no-store'}).then(r=>r.json()).then(value=>window.__androidPairingCheck=value)");
+        waitUntil("The paired WebView must have an independent authenticated session",
+                () -> "true".equals(evaluate("Boolean(window.__androidPairingCheck?.user)")));
+        Object decoded = new JSONTokener(evaluate("JSON.stringify(window.__androidPairingCheck)")).nextValue();
+        JSONObject mobileSession = new JSONObject((String) decoded);
+        assertEquals(owner.getString("id"), mobileSession.getJSONObject("user").getString("id"));
+        assertEquals(owner.getString("email"), mobileSession.getJSONObject("user").getString("email"));
+        Context context = InstrumentationRegistry.getInstrumentation().getTargetContext();
+        assertEquals(root, context.getSharedPreferences("connection", Context.MODE_PRIVATE).getString("server_url", ""));
+        assertFalse("Pairing token must not enter Android connection preferences",
+                context.getSharedPreferences("connection", Context.MODE_PRIVATE).getAll().toString().contains(token));
+        assertEquals("true", evaluate("window.location.hash === ''"));
+    }
+
+    @Test
     public void serviceAddressValidationPreservesOriginBoundaries() {
         String base = ServerAddress.normalize("http://192.168.1.20:3000/");
+        assertEquals("https://example.com/", ServerAddress.normalize(" HTTPS://EXAMPLE.COM:443/ "));
+        assertEquals("http://[::1]/", ServerAddress.normalize("http://[0:0:0:0:0:0:0:1]:80/"));
+        assertTrue(ServerAddress.sameOrigin("http://[::1]/", "http://[0:0:0:0:0:0:0:1]/api"));
         assertTrue(ServerAddress.sameOrigin(base, "http://192.168.1.20:3000/api/auth/session"));
         assertFalse(ServerAddress.sameOrigin(base, "http://192.168.1.20:3001/"));
         assertFalse(ServerAddress.sameOrigin(base, "https://192.168.1.20:3000/"));
         assertFalse(ServerAddress.sameOrigin("https://example.com", "https://example.com.evil.invalid/"));
         assertFalse(ServerAddress.sameOrigin("https://example.com", "javascript:alert(1)"));
-        try {
-            ServerAddress.normalize("https://example.com:99999");
-            fail("Out-of-range ports must be rejected");
-        } catch (IllegalArgumentException expected) {
-            // The app must refuse invalid network addresses before they reach WebView.
+        assertFalse(ServerAddress.sameOrigin("https://example.com", "https://example.com\\@evil.invalid/"));
+        for (String invalid : new String[] {
+                "https://example.com:99999", "http://127.1", "http://0177.0.0.1",
+                "http://2130706433", "http://0x7f000001", "http://[:::1]",
+                "https://example.com%2f.evil.invalid", "https://example.com\\@evil.invalid"
+        }) {
+            try {
+                ServerAddress.normalize(invalid);
+                fail("The JNI core must reject unsafe or ambiguous addresses");
+            } catch (IllegalArgumentException expected) {
+                // The actual shared C++ core refuses these before WebView loads.
+            }
         }
     }
 

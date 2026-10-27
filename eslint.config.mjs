@@ -11,6 +11,7 @@ export default defineConfig([
     "node_modules/**",
     "data/**",
     "artifacts/**",
+    "desktop/**",
     "android/**/build/**",
     "android/.gradle/**",
     "playwright-report/**",

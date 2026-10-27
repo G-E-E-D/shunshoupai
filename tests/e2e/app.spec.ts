@@ -86,7 +86,7 @@ test("two independent devices parse, review, save, synchronize edits, complete a
     expect(await list(page.request)).toHaveLength(0);
     await expect(page.getByLabel("草稿 1 标题")).toHaveValue("面试");
     await page.getByLabel("草稿 1 标题").fill("产品实习面试");
-    await mkdir("docs/screenshots", { recursive: true });
+    await mkdir("artifacts/screenshots", { recursive: true });
     const dismissNotice = page.getByRole("button", {
       name: "关闭提示",
       exact: true,
@@ -94,7 +94,7 @@ test("two independent devices parse, review, save, synchronize edits, complete a
     if (await dismissNotice.isVisible()) await dismissNotice.click();
     await page.evaluate(() => window.scrollTo(0, 0));
     await page.screenshot({
-      path: "docs/screenshots/drafts.png",
+      path: "artifacts/screenshots/drafts.png",
       fullPage: true,
     });
     const savedResponse = page.waitForResponse(
@@ -150,12 +150,12 @@ test("two independent devices parse, review, save, synchronize edits, complete a
 
     await page.evaluate(() => window.scrollTo(0, 0));
     await page.screenshot({
-      path: "docs/screenshots/desktop.png",
+      path: "artifacts/screenshots/desktop.png",
       fullPage: true,
     });
     await mobile.evaluate(() => window.scrollTo(0, 0));
     await mobile.screenshot({
-      path: "docs/screenshots/mobile.png",
+      path: "artifacts/screenshots/mobile.png",
       fullPage: true,
     });
     const dimensions = await mobile.evaluate(() => ({

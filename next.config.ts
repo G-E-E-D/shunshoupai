@@ -8,6 +8,7 @@ const localAddresses = Object.values(networkInterfaces()).flatMap((entries) =>
 );
 
 const config: NextConfig = {
+  output: "standalone",
   distDir: process.env.NEXT_DIST_DIR || ".next",
   devIndicators: false,
   allowedDevOrigins: ["127.0.0.1", ...localAddresses],

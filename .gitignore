@@ -19,6 +19,9 @@ android/local.properties
 android/**/build/
 android/.idea/
 artifacts/
+desktop/build*/
+desktop/dist/
+desktop/.qt/
 *.jks
 *.keystore
 *.p12

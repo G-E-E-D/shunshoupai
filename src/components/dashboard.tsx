@@ -27,7 +27,6 @@ import {
   Edit3,
   HelpCircle,
   KeyRound,
-  QrCode,
   LayoutDashboard,
   LoaderCircle,
   LogOut,
@@ -50,7 +49,6 @@ import type {
   ModelSettingsInfo,
 } from "@/lib/types";
 import ModelSettingsPanel from "@/components/model-settings";
-import ConnectionPanel from "@/components/connection-panel";
 import { commitSchema } from "@/lib/schemas";
 import {
   api,
@@ -75,6 +73,27 @@ const EMPTY_SESSION: SessionInfo = {
   mode: "local",
   ai_provider: "rules",
 };
+
+// StrictMode can mount twice. Share only the in-flight exchange so a one-use
+// code is never redeemed twice, and erase the fragment before any API request.
+let pairingBootstrap: Promise<SessionInfo> | null = null;
+function bootstrapSession(): Promise<SessionInfo> {
+  if (pairingBootstrap) return pairingBootstrap;
+  const fragment = window.location.hash;
+  if (!fragment.startsWith("#pair=")) return api<SessionInfo>("/api/auth/session");
+  window.history.replaceState(null, "", window.location.pathname + window.location.search);
+  const token = fragment.slice(6);
+  if (!/^[A-Za-z0-9_-]{43}$/.test(token))
+    return Promise.reject(new Error("登录二维码格式无效，请在电脑端重新生成。"));
+  const exchange = api<SessionInfo>("/api/pairing/redeem", {
+    method: "POST", body: JSON.stringify({ token }),
+  });
+  pairingBootstrap = exchange;
+  void exchange.finally(() => {
+    if (pairingBootstrap === exchange) pairingBootstrap = null;
+  }).catch(() => {});
+  return exchange;
+}
 
 function Brand({ small = false }: { small?: boolean }) {
   return (
@@ -388,7 +407,6 @@ export default function Dashboard({ initialDay }: { initialDay: string }) {
   const [authOpen, setAuthOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [modelSettingsOpen, setModelSettingsOpen] = useState(false);
-  const [connectionOpen, setConnectionOpen] = useState(false);
   const [modelSettings, setModelSettings] = useState<ModelSettingsInfo | null>(
     null,
   );
@@ -428,7 +446,6 @@ export default function Dashboard({ initialDay }: { initialDay: string }) {
   const closeAuth = useCallback(() => setAuthOpen(false), []);
   const closeSettings = useCallback(() => setSettingsOpen(false), []);
   const closeModelSettings = useCallback(() => setModelSettingsOpen(false), []);
-  const closeConnection = useCallback(() => setConnectionOpen(false), []);
   const closeHelp = useCallback(() => setHelpOpen(false), []);
   const closeEditor = useCallback(() => {
     if (!actionLock.current) setEditor(null);
@@ -513,11 +530,12 @@ export default function Dashboard({ initialDay }: { initialDay: string }) {
 
   useEffect(() => {
     const epoch = authEpoch.current;
-    api<SessionInfo>("/api/auth/session")
+    bootstrapSession()
       .then((data) => {
         if (epoch !== authEpoch.current) return;
         userRef.current = data.user?.id || null;
         setSession(data);
+          if (data.pairing_limited) setNotice({ kind: "info", text: `扫码临时授权有效至 ${data.session_expires_at || "当前会话到期"}；到期后重新扫码或密码登录。` });
       })
       .catch((error) => {
         if (epoch === authEpoch.current) setSyncError(errorMessage(error));
@@ -541,7 +559,6 @@ export default function Dashboard({ initialDay }: { initialDay: string }) {
     setModelSettings(null);
     modelVersion.current = 0;
     setModelSettingsOpen(false);
-    setConnectionOpen(false);
     if (userId) {
       try {
         const savedText =
@@ -1211,15 +1228,6 @@ export default function Dashboard({ initialDay }: { initialDay: string }) {
               <p>把脑子里的安排说出来，剩下的，顺手排。</p>
             </div>
             <div className="heading-actions">
-              <button
-                className="secondary-button connect-phone-button"
-                onClick={() => {
-                  if (requireAuth()) setConnectionOpen(true);
-                }}
-              >
-                <QrCode size={17} />
-                手机连接
-              </button>
               <button className="secondary-button add-button" onClick={addNew}>
                 <Plus size={17} />
                 手动添加
@@ -1999,15 +2007,6 @@ export default function Dashboard({ initialDay }: { initialDay: string }) {
               }));
             }}
           />
-        </Modal>
-      )}
-      {connectionOpen && userId && (
-        <Modal
-          title="手机连接"
-          subtitle="在电脑展示二维码，用安卓应用扫码连接同一个日程服务。"
-          close={closeConnection}
-        >
-          <ConnectionPanel key={userId} />
         </Modal>
       )}
       {helpOpen && (

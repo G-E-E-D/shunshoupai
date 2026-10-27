@@ -1,0 +1,97 @@
+name: Windows Desktop Installer
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'desktop/**'
+      - 'shared/**'
+      - 'src/**'
+      - 'public/**'
+      - 'package*.json'
+      - 'next.config.ts'
+      - '.github/workflows/desktop.yml'
+  pull_request:
+    paths:
+      - 'desktop/**'
+      - 'shared/**'
+      - 'src/**'
+      - 'public/**'
+      - 'package*.json'
+      - 'next.config.ts'
+      - '.github/workflows/desktop.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: desktop-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  windows:
+    runs-on: windows-2022
+    timeout-minutes: 35
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24.18.0'
+          cache: npm
+      - name: Prepare MSVC 2022 x64
+        uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756 # v1
+        with:
+          arch: x64
+      - name: Install Qt Widgets and Network
+        uses: jurplel/install-qt-action@b344308e4483fc892e0d27b3cd1b173ebdd95f06 # v4.5.0
+        with:
+          version: '6.8.3'
+          host: windows
+          target: desktop
+          arch: win64_msvc2022_64
+          archives: qtbase
+          cache: true
+      - name: Install NSIS compiler
+        run: choco install nsis --version=3.11 --no-progress -y
+      - name: Build relocatable API backend
+        env:
+          APP_STORAGE: local
+          AI_API_KEY: ''
+          NEXT_TELEMETRY_DISABLED: '1'
+        run: |
+          npm ci
+          if ($LASTEXITCODE -ne 0) { throw 'npm ci failed.' }
+          npm run build
+          if ($LASTEXITCODE -ne 0) { throw 'Next standalone build failed.' }
+      - name: Compile native C++ Qt application
+        run: |
+          cmake -S desktop -B desktop/build -G 'Visual Studio 17 2022' -A x64
+          if ($LASTEXITCODE -ne 0) { throw 'CMake configuration failed.' }
+          cmake --build desktop/build --config Release --parallel 2
+          if ($LASTEXITCODE -ne 0) { throw 'Native compilation failed.' }
+          ctest --test-dir desktop/build -C Release --output-on-failure
+          if ($LASTEXITCODE -ne 0) { throw 'Shared C++ connection tests failed.' }
+      - name: Deploy Qt, bundled Node, backend, and build one-click installer
+        id: package
+        run: ./desktop/scripts/package.ps1
+      - name: Test actual installation and native widgets
+        run: ./desktop/scripts/smoke.ps1 -Installer '${{ steps.package.outputs.installer }}' -TestRoot (Join-Path $env:RUNNER_TEMP 'shunshoupai-installer-test')
+      - name: Upload verified Windows release files
+        uses: actions/upload-artifact@v6
+        with:
+          name: shunshoupai-desktop-release-v${{ steps.package.outputs.version }}
+          path: |
+            desktop/dist/*-setup.exe
+            desktop/dist/SHA256SUMS.txt
+          if-no-files-found: error
+      - name: Upload desktop smoke reports
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: desktop-smoke-reports
+          path: ${{ runner.temp }}/shunshoupai-installer-test/reports/
+          if-no-files-found: ignore

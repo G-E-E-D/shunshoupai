@@ -174,9 +174,9 @@ test("personal model setup is tested before save, synchronized by account and us
   expect(saved.key_hint).toContain(key.slice(-4));
   expect(saved.has_api_key).toBe(true);
   await expect(dialog.getByLabel("API Key", { exact: true })).toHaveValue("");
-  await mkdir("docs/screenshots", { recursive: true });
+  await mkdir("artifacts/screenshots", { recursive: true });
   await page.screenshot({
-    path: "docs/screenshots/model-settings.png",
+    path: "artifacts/screenshots/model-settings.png",
     fullPage: true,
   });
 
@@ -342,49 +342,44 @@ test("model settings reject prompt overrides and removal preserves a version tom
   ).toBe(200);
 });
 
-test("phone QR shares only a usable service root and disappears for unsafe or loopback input", async ({
-  page,
-}) => {
-  await register(page, `phone-qr-${randomUUID()}@example.com`);
-  const infoResponse = page.waitForResponse((response) =>
-    response.url().endsWith("/api/connection-info"),
-  );
-  await page.getByRole("button", { name: "手机连接", exact: true }).click();
-  const response = await infoResponse;
-  expect(response.status()).toBe(200);
-  const info = await response.json();
-  expect(Object.keys(info).sort()).toEqual([
-    "candidates",
-    "current_origin",
-    "hint",
-  ]);
-  const dialog = page.getByRole("dialog", { name: "手机连接", exact: true });
-  const address = dialog.getByLabel("手机访问的服务地址", { exact: true });
-  const qr = dialog.getByRole("img", {
-    name: "连接顺手排服务的二维码",
-    exact: true,
-  });
-  await address.fill("http://localhost:3001");
-  await expect(qr).toHaveCount(0);
-  await expect(
-    dialog.getByRole("button", { name: "复制服务地址", exact: true }),
-  ).toBeDisabled();
-  await expect(dialog.getByText(/这个地址指向扫码手机自身/)).toBeVisible();
-  await address.fill("http://192.168.1.20:3000");
-  await expect(qr).toBeVisible();
-  await expect(qr).toHaveAttribute("src", /^data:image\/png;base64,/);
-  await expect(
-    dialog.getByRole("button", { name: "复制服务地址", exact: true }),
-  ).toBeEnabled();
-  for (const unsafe of [
-    "javascript:alert(1)",
-    "https://user:password@example.com",
-    "https://example.com?token=secret",
-  ]) {
-    await address.fill(unsafe);
-    await expect(qr).toHaveCount(0);
-    await expect(
-      dialog.getByRole("button", { name: "复制服务地址", exact: true }),
-    ).toBeDisabled();
-  }
+test("a one-use desktop QR logs a clean mobile client into the same account and erases the code", async ({ page, browser }) => {
+  await register(page, `pair-${randomUUID()}@example.com`);
+  const source = await (await page.request.get("/api/auth/session")).json();
+  const issued = await page.request.post("/api/pairing/issue", { data: {} });
+  expect(issued.status()).toBe(200);
+  const ticket = await issued.json();
+  expect(ticket.token).toMatch(/^[A-Za-z0-9_-]{43}$/);
+  expect(Date.parse(ticket.expires_at) - Date.now()).toBeLessThanOrEqual(90_000);
+  expect(issued.headers()["cache-control"]).toContain("no-store");
+  const mobileContext = await browser.newContext({ baseURL: "http://localhost:3001", viewport: { width: 360, height: 800 }, isMobile: true, hasTouch: true });
+  try {
+    const mobile = await mobileContext.newPage();
+    const exchanged = mobile.waitForResponse(r => r.url().endsWith("/api/pairing/redeem"));
+    await mobile.goto(`/#pair=${ticket.token}`);
+    expect((await exchanged).status()).toBe(200);
+    await expect(mobile.locator(".sync-badge")).toHaveText("已同步");
+    expect(new URL(mobile.url()).hash).toBe("");
+    const current = await (await mobile.request.get("/api/auth/session")).json();
+    expect(current.user.id).toBe(source.user.id);
+    const cookies = await mobileContext.cookies();
+    expect(cookies.some(cookie => cookie.name === "shunshoupai_session" && cookie.httpOnly)).toBe(true);
+    expect(await mobile.evaluate(() => JSON.stringify({ local: { ...localStorage }, session: { ...sessionStorage } }))).not.toContain(ticket.token);
+    const replay = await mobile.request.post("/api/pairing/redeem", { data: { token: ticket.token } });
+    expect(replay.status()).toBe(400);
+    // The phone has an independent local session after the one-time grant.
+    expect((await page.request.post("/api/auth/logout", { data: {} })).status()).toBe(200);
+    expect((await (await mobile.request.get("/api/auth/session")).json()).user.id).toBe(source.user.id);
+  } finally { await mobileContext.close(); }
+});
+
+test("QR grants reject hostile origins and are revoked when the issuing session logs out", async ({ page }) => {
+  await register(page, `pair-revoke-${randomUUID()}@example.com`);
+  const hostile = await page.request.post("/api/pairing/issue", { data: {}, headers: { Origin: "https://untrusted.example" } });
+  expect(hostile.status()).toBe(403);
+  const ticket = await (await page.request.post("/api/pairing/issue", { data: {} })).json();
+  expect((await page.request.post("/api/auth/logout", { data: {} })).status()).toBe(200);
+  const revoked = await page.request.post("/api/pairing/redeem", { data: { token: ticket.token } });
+  expect(revoked.status()).toBe(400);
+  const invalid = await page.request.post("/api/pairing/redeem", { data: { token: "invalid" } });
+  expect(invalid.status()).toBe(400);
 });

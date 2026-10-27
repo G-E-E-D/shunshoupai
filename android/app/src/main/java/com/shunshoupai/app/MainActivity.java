@@ -230,7 +230,7 @@ public final class MainActivity extends ComponentActivity {
                     showLoadError(getString(R.string.unsafe_redirect));
                     return;
                 }
-                mainFrameUrl = url;
+                mainFrameUrl = url.split("#", 2)[0];
                 mainFrameFailed = false;
                 errorPanel.setVisibility(View.GONE);
                 progress.setProgress(0);
@@ -301,16 +301,16 @@ public final class MainActivity extends ComponentActivity {
             Toast.makeText(this, R.string.scan_cancelled, Toast.LENGTH_SHORT).show();
             return;
         }
-        final String scanned;
+        final ScannedConnection scanned;
         try {
-            scanned = ServerAddress.normalize(contents);
+            scanned = ScannedConnection.parse(contents);
         } catch (IllegalArgumentException error) {
             showScanHelp(R.string.scan_invalid);
             return;
         }
-        serverInput.setText(scanned);
+        serverInput.setText(scanned.serviceRoot);
         connectionError.setVisibility(View.GONE);
-        connectFromInput();
+        connectFromInput(scanned.hasPairing ? scanned.initialUrl : null);
     }
 
     private void showScanHelp(int message) {
@@ -320,6 +320,10 @@ public final class MainActivity extends ComponentActivity {
     }
 
     private void connectFromInput() {
+        connectFromInput(null);
+    }
+
+    private void connectFromInput(String initialUrl) {
         if (changingServer) return;
         final String next;
         try {
@@ -336,14 +340,14 @@ public final class MainActivity extends ComponentActivity {
                 .setTitle(R.string.switch_server_title)
                 .setMessage(R.string.server_changed)
                 .setNegativeButton(R.string.cancel, null)
-                .setPositiveButton(R.string.switch_server_confirm, (dialog, which) -> connectTo(next))
+                .setPositiveButton(R.string.switch_server_confirm, (dialog, which) -> connectTo(next, initialUrl))
                 .show();
-        } else connectTo(next);
+        } else connectTo(next, initialUrl);
     }
 
-    private void connectTo(String next) {
+    private void connectTo(String next, String initialUrl) {
         hideKeyboard();
-        if (serverAddress.equals(next)) {
+        if (serverAddress.equals(next) && initialUrl == null) {
             showWebScreen();
             reloadService();
             return;
@@ -369,7 +373,7 @@ public final class MainActivity extends ComponentActivity {
             changingServer = false;
             connectButton.setEnabled(true);
             showWebScreen();
-            reloadService();
+            reloadService(initialUrl);
         });
     }
 
@@ -397,6 +401,10 @@ public final class MainActivity extends ComponentActivity {
     }
 
     private void reloadService() {
+        reloadService(null);
+    }
+
+    private void reloadService(String initialUrl) {
         if (serverAddress.isEmpty() || changingServer) return;
         if (webView == null) {
             webView = new WebView(this);
@@ -406,7 +414,7 @@ public final class MainActivity extends ComponentActivity {
             configureWebView();
         }
         showWebScreen();
-        webView.loadUrl(serverAddress);
+        webView.loadUrl(initialUrl == null ? serverAddress : initialUrl);
     }
 
     private void showLoadError(String message) {
@@ -420,9 +428,8 @@ public final class MainActivity extends ComponentActivity {
     private void openExternal(String destination) {
         try {
             URI uri = URI.create(destination);
-            String scheme = uri.getScheme();
-            if (scheme == null || uri.getHost() == null || uri.getRawUserInfo() != null
-                || (!scheme.equalsIgnoreCase("http") && !scheme.equalsIgnoreCase("https"))) {
+            String root = ServerAddress.normalize(uri.getScheme() + "://" + uri.getRawAuthority());
+            if (!ServerAddress.sameOrigin(root, destination)) {
                 Toast.makeText(this, R.string.blocked_navigation, Toast.LENGTH_SHORT).show();
                 return;
             }
@@ -454,7 +461,12 @@ public final class MainActivity extends ComponentActivity {
     @Override protected void onSaveInstanceState(Bundle state) {
         state.putString(STATE_SERVER, serverAddress);
         state.putBoolean(STATE_ACTIVE, webScreen.getVisibility() == View.VISIBLE);
-        if (webView != null && !serverAddress.isEmpty()) webView.saveState(state);
+        // A pairing capability is only for the first load. Never persist it in
+        // Activity restoration state or the remembered service URL.
+        if (webView != null && !serverAddress.isEmpty()) {
+            String current = webView.getUrl();
+            if (current == null || current.indexOf('#') < 0) webView.saveState(state);
+        }
         super.onSaveInstanceState(state);
     }
 

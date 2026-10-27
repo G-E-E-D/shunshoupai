@@ -31,6 +31,7 @@ export default defineConfig({
     reuseExistingServer: false,
     env: {
       APP_STORAGE: "local",
+      APP_MOBILE_UI_TEST: "true",
       APP_DB_PATH: "test-results/e2e.sqlite",
       NEXT_DIST_DIR: ".next-e2e",
       AI_API_KEY: "",

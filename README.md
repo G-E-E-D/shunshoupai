@@ -1,122 +1,102 @@
 # 顺手排 · 把想法排进生活
 
-[![自动检查](https://github.com/G-E-E-D/shunshoupai/actions/workflows/ci.yml/badge.svg)](https://github.com/G-E-E-D/shunshoupai/actions/workflows/ci.yml)
-[![Android APK](https://github.com/G-E-E-D/shunshoupai/actions/workflows/android.yml/badge.svg)](https://github.com/G-E-E-D/shunshoupai/actions/workflows/android.yml)
+电脑端是 **C++ / Qt Widgets 原生应用**，不使用浏览器或 WebView 作为桌面界面。安卓端沿用现有 Java 工程，通过 NDK / JNI 调用与桌面共用的 C++ 连接核心；安卓日程界面继续使用应用内 WebView。两个客户端访问同一服务，使用同一账号和固定的日程提示词。
 
-把一段安排整理成可编辑草稿，确认后保存，再用手机、电脑接着安排。
+[Windows 一键安装 EXE](https://github.com/G-E-E-D/shunshoupai/releases/download/v1.2.0/shunshoupai-desktop-v1.2.0-setup.exe) · [Android APK](https://github.com/G-E-E-D/shunshoupai/releases/download/v1.2.0/shunshoupai-android-v1.2.0.apk) · [发布页](https://github.com/G-E-E-D/shunshoupai/releases/tag/v1.2.0)
 
-[源码仓库](https://github.com/G-E-E-D/shunshoupai) · [图文教程](docs/tutorial.md) · [云端配置](docs/cloud-setup.md) · [验收记录](docs/acceptance.md) · [创作说明](docs/creation-note.md)
+## 安装后使用
 
-## Android 客户端
+1. Windows 运行安装器，打开“顺手排”。安装包包含 Qt 运行库、Node.js 和本地服务，应用会自动启动服务，无需另装 Node。
+2. 点击“登录 / 注册”，注册自己的账号。无预设账号，本地模式不发送验证邮件。
+3. 写下一段安排，点击“帮我整理一下”；检查可编辑草稿，确认后才保存。
+4. “模型设置”中填写自己的 Base URL、模型名称和 API Key，测试连接后保存。日程提示词固定在服务端，用户不需要填写。
+5. 电脑点击“手机扫码登录”，选择局域网地址并生成一次性登录码。安卓首页点击“扫码连接”，即可连接并登录同一账号，无需再次输入密码。
 
-Android 8.0 及以上可安装安卓客户端，连接同一个日程服务并使用同一账号。它提供原生服务配置、返回、刷新和网络错误重试，日程界面与现有 Web 应用共用。
+两台设备需能访问同一服务。本地模式中，手机和电脑连接同一 Wi-Fi，允许可信局域网访问端口 **43127**，电脑应用保持运行。扫码登录码有效 **90 秒**、只能使用一次；它是临时登录凭据，请勿截图转发。地址二维码仍可用于仅连接、不登录。
 
-[下载 v1.1.0 APK](https://github.com/G-E-E-D/shunshoupai/releases/download/v1.1.0/shunshoupai-android-v1.1.0.apk) · [v1.1.0 发布页](https://github.com/G-E-E-D/shunshoupai/releases/tag/v1.1.0) · [安装、连接与构建说明](docs/android.md)
+Windows 数据保存在 `%LOCALAPPDATA%/Shunshoupai/data/`，升级和卸载保留用户数据。退出桌面应用会停止本次启动的本地服务。桌面登录 Cookie 只保存在进程内存，重新启动后需登录；账号与日程保留在数据库中。
 
-首次打开请填写电脑的局域网地址或已部署的 HTTPS 地址。APK 不内置日程后端，电脑本地演示时仍需运行 `npm run start`；手机上填写 `localhost` 会指向手机自身。
-
-Android 构建、签名校验、release 包模拟器安装启动及 5 项设备测试已通过，详见 [验收记录](docs/acceptance.md)。源码构建使用 JDK 17、Android SDK 36 和仓库内 Gradle 8.13 Wrapper。
-
-![顺手排桌面界面](docs/screenshots/desktop.png)
-
-## 五分钟运行
-
-需要 **Node.js 24+** 和 npm。默认模式不需要数据库服务或模型密钥。
-
-```sh
-git clone https://github.com/G-E-E-D/shunshoupai.git
-cd shunshoupai
-npm ci
-npm run dev
-```
-
-打开 [http://localhost:3000](http://localhost:3000)，点击登录入口，选择“注册账号”，用自己的邮箱标识和至少 8 位密码注册。**没有预设共享账号**。本地模式不会发送验证邮件，暂未提供密码找回。
-
-第一次写入会自动创建 `data/shunshoupai.sqlite`。关闭、重启服务后数据仍在。测试使用独立的临时数据库，不覆盖你的日程。
-
-输入这句话，点击“帮我整理一下”，检查卡片后“确认保存”：
-
-> 明天下午三点到四点面试，今天晚上七点到八点改简历，八点到九点准备面试。
-
-**没有模型密钥时，页面会显示“规则体验 / 规则解析”。** 它是真正运行的有限中文规则解析器，不是模型调用。配置服务端 `AI_API_KEY` 后才会使用真实模型；上游错误不会伪装成成功。AI 与规则输出都必须经过校验和你的确认，不能直接写入数据库。
-
-## 手机和电脑同步
-
-1. 让两台设备连接同一局域网；停止开发服务，执行 `npm run build`、`npm run start`，使用生产服务演示。
-2. 用 `ipconfig` 找到电脑的局域网 IPv4 地址，例如 `192.168.1.20`。
-3. 两端打开 `http://192.168.1.20:3000`，登录同一账号。在 Windows 防火墙中仅对可信局域网允许该开发服务。
-4. 手机保存，电脑查看；电脑修改后，让手机回到页面或点击刷新。
-
-开发和生产命令均监听 `0.0.0.0`。开发配置已允许本机发现的 IPv4 地址用于调试；局域网体验仍推荐上述生产命令，以免依赖开发热更新的来源配置，服务电脑保持开机。HTTP 局域网演示请保持 `COOKIE_SECURE=false`，并留空 `APP_ORIGIN`，这样不同访问地址会按各自 Host 验证来源。若固定为 `http://localhost:3000`，手机地址的写请求会被拒绝；公网部署则应填写实际 HTTPS origin。
-
-同步来源是同一服务端数据库。前台约 **8 秒**补拉一次，也会在聚焦、重连、手动刷新时查询；页面显示最后同步时间和错误状态。不是操作后只更新当前浏览器的模拟同步。两台设备各自运行一份本地服务不会共享数据；公网访问或多实例部署请使用 [Supabase 模式](docs/cloud-setup.md)。
-
-## 已实现与边界
+## 功能与边界
 
 | 能力 | 当前行为 |
 | --- | --- |
-| 个人账号 | 本地密码哈希与可撤销会话，或 Supabase 邮箱认证；按用户隔离 |
-| 一句话整理 | 最多 2000 字、每次 1–5 项；模型或明确标记的有限规则解析 |
-| 草稿确认 | 修改标题和起止时间、移除或取消；确认前不入库 |
-| 日程管理 | 新建、查看、修改、完成/恢复、软删除；当天/七天视图和已加载范围内搜索 |
-| 保存保护 | 批量原子写入、请求幂等、版本冲突；事务内再次检查未完成日程重叠 |
-| 错误处理 | 断网未发送显示未保存；响应丢失显示状态待确认，用原请求编号核实 |
-| 前台提醒 | 可选；开始前 5 分钟和进行中显示站内提示 |
-| 响应式界面 | 桌面双栏，手机单栏；截图见 [桌面](docs/screenshots/desktop.png) / [手机](docs/screenshots/mobile.png) |
-| Android 客户端 | 原生连接配置与 WebView 日程工作台；连接现有服务，安装及构建步骤见 [Android 说明](docs/android.md) |
+| 原生桌面 | C++17 / Qt 6 Widgets、Network；日程整理、草稿确认、日程增删改、完成/恢复、当天/七天、搜索 |
+| 安卓 | Java 平台界面和扫码相机；NDK / JNI C++ 负责地址规范化、同源与扫码登录协议；日程工作台使用 WebView |
+| 个人模型 | 每账号保存兼容 Chat Completions 的 Base URL、模型名和 Key；Key 在服务端 AES-256-GCM 加密，仅读回掩码 |
+| 固定提示词 | `src/lib/parser.ts` 固定日程系统提示词，模型设置接口拒绝提示词覆盖 |
+| 扫码登录 | 高熵一次性码、90 秒有效、数据库原子兑换；二维码 fragment 携带，不含密码、长期会话或模型 Key |
+| 跨端同步 | 同服务同账号；前台约 8 秒补拉，手动刷新和安卓回前台时查询 |
+| 保存保护 | 草稿确认、批量事务、防重编号、版本冲突和时间重叠检查；不确定结果保留原编号核实 |
+| 无模型体验 | 明确显示规则解析；不调用付费模型，也不把规则结果当 AI |
+| 时间与提醒 | 上海时区单次日程，2000–2100 年、最长 24 小时；提醒仅前台生效 |
 
-时间统一使用上海时区，接受 2000–2100 年、最长 24 小时的单次日程。缺少结束时间时，会明确标注默认 60 分钟等假设，仍由用户确认。“周五三点”缺少上午/下午会追问；循环、全天和跨时区表达不会被悄悄转换为单次日程。
+未提供 iOS、可靠后台/锁屏提醒、离线合并、循环日程、自动空档排期、外部日历双向同步或已托管公网 Demo。
 
-当前**未实现**自动寻找空档排期、后台/锁屏系统提醒、离线编辑合并、iOS 客户端、外部日历双向同步。草稿保留在当前浏览器或安卓应用的本地网页存储中，不承诺跨端共享。交付包含源码、Android 客户端和图文教程；真实模型、托管 Supabase、公网部署和真实手机网络测试需要相应账号配置，详见验收记录。
+默认 SQLite 的手机登录是独立 7 天会话。可选 Supabase 模式的扫码授权只持续至源 access JWT 到期，到期重新扫码或密码登录；不会复制 refresh token。完整说明见 [模型与扫码](docs/model-settings.md)、[桌面安装与构建](docs/desktop.md)、[安卓说明](docs/android.md)、[验收记录](docs/acceptance.md)。
 
-## 配置与部署
+## 从源码运行
 
-将 `.env.example` 复制为 `.env.local` 后按需填写，**不要提交密钥或本地数据**。
+仓库保存源码、配置、文档和必要的构建引导文件；`.exe`、`.apk`、构建目录、运行数据和截图只放在忽略目录、CI 附件或 Releases。
 
-| 变量 | 说明 |
-| --- | --- |
-| `APP_STORAGE` | 默认 `local`；云端设为 `supabase` |
-| `APP_DB_PATH` | 可选，SQLite 持久文件绝对路径；默认 `data/shunshoupai.sqlite` |
-| `AI_API_KEY` | 模型密钥，仅服务端使用；留空使用规则解析 |
-| `AI_BASE_URL` / `AI_MODEL` | OpenAI 兼容 Chat Completions 服务地址/可用模型 |
-| `AI_DAILY_LIMIT` | 每账号每天解析上限，默认 50，限制为 1–100，UTC 零点重置 |
-| `NEXT_PUBLIC_SUPABASE_URL` / `NEXT_PUBLIC_SUPABASE_ANON_KEY` | 云端项目地址和公开项目密钥，不使用管理密钥 |
-| `APP_ORIGIN` / `COOKIE_SECURE` | 正式 HTTPS origin / 正式环境设为 `true` |
-
-云端先执行 [SQL 迁移](supabase/migrations/20261027000000_initial.sql)，再填写 Supabase 配置。完整步骤、认证设置、权限与 RPC 说明见 [云端配置](docs/cloud-setup.md)。
+后端需要 Node.js 24：
 
 ```sh
+npm ci
 npm run build
 npm run start
 ```
 
-SQLite 部署需要单个服务实例和持久可写磁盘；临时磁盘或多实例平台应使用 Supabase。仓库没有已发布的公网 Demo，不把本机地址当作在线部署地址。
+源码后端默认监听 3000。它提供 API 和安卓工作台；普通电脑浏览器不会打开桌面工作台。
 
-## 检查与复现
+桌面需要 Qt 6.8+ Widgets/Network、CMake 3.21+、C++17 编译器：
+
+```sh
+cmake -S desktop -B desktop/build
+cmake --build desktop/build --config Release
+# Windows 示例；连接已启动的源码后端
+desktop/build/Release/Shunshoupai.exe --backend http://127.0.0.1:3000
+```
+
+Android 使用 JDK 17、Android SDK 36、NDK 28.2.13676358 和仓库内 Gradle Wrapper。Windows 安装器由 NSIS 构建；完整步骤见平台文档。
+
+## 服务端配置
+
+复制 `.env.example` 为 `.env.local`，按需配置，不要提交密钥。
+
+| 变量 | 用途 |
+| --- | --- |
+| `APP_STORAGE` | 默认 local；可选 supabase |
+| `APP_DB_PATH` | SQLite 路径；默认源码模式 data/shunshoupai.sqlite |
+| `AI_API_KEY` / `AI_BASE_URL` / `AI_MODEL` | 可选服务端默认模型，个人配置优先 |
+| `MODEL_SETTINGS_ENCRYPTION_KEY` | 云端/多实例必须设置一致的 32 字节 Base64 主密钥；本地自动生成私有文件 |
+| `AI_ALLOWED_PRIVATE_HOSTS` | 管理员允许的本地模型主机；默认只允许公网 HTTPS |
+| `NEXT_PUBLIC_SUPABASE_URL` / `NEXT_PUBLIC_SUPABASE_ANON_KEY` | 可选 Supabase 地址和公开密钥 |
+| `APP_ORIGIN` / `COOKIE_SECURE` | 公网实际 HTTPS origin / true；本地局域网留空 / false |
+
+新 Supabase 部署按顺序执行全部 [迁移](supabase/migrations/)；已有部署追加个人模型和扫码配对迁移。见 [云端配置](docs/cloud-setup.md)。SQLite 单实例需持久可写磁盘；多实例使用 Supabase 和一致的加密主密钥。
+
+## 检查与结构
 
 ```sh
 npm run check
-npx playwright install chromium
 npm run test:e2e
+ctest --test-dir desktop/build -C Release --output-on-failure
 ```
 
-`check` 依次运行 ESLint、TypeScript、单元/服务测试和生产构建。端到端测试覆盖浏览器业务流程，使用隔离的数据库。SQL 权限与事务检查脚本在 [supabase/tests/invariants.sql](supabase/tests/invariants.sql)，仅对可丢弃开发库执行。
-
-测试不调用付费模型、不依赖外部数据库。自动化证据和仍需人工验证的部分详见 [验收记录](docs/acceptance.md)。
-
-## 结构与提交材料
+Windows CI 真实安装 EXE，验证随包 Node/Qt、原生控件渲染、真实 API、扫码登录、重装/卸载数据保留。Android CI 构建并签名 APK，安装到模拟器并运行 Java/JNI/WebView 联调。测试使用虚构账号和隔离数据库，不调用付费模型。实际结果与外部环境边界见 [验收记录](docs/acceptance.md)。
 
 ```text
-src/app/                 响应式界面和 Route Handler API
-src/components/          可编辑草稿、日程与同步工作台
-android/                 Android 原生连接界面与 WebView 客户端
-src/lib/parser.ts        规则解析、真实模型适配和结构校验
-src/lib/server/          账号、SQLite/Supabase、事务与请求保护
-supabase/                云端迁移及 SQL 不变量测试
-tests/                   解析/存储/接口与浏览器测试
-docs/                    教程、截图、创作说明、展示脚本与验收记录
+desktop/        C++ / Qt 原生界面、NSIS、Windows 打包与验收
+shared/core/    桌面与 Android JNI 共用的 C++ 连接协议
+android/        现有 Java 工程、NDK / JNI、相机与 WebView
+src/app/api/    认证、日程、个人模型、一次性扫码登录
+src/components/ 安卓 WebView 中的日程界面
+src/lib/        规则/模型解析、SQLite / Supabase、保存保护
+supabase/       迁移及权限/事务测试
+tests/          服务、协议和安卓工作台集成测试
+docs/           运行、构建、教程和验收文档
 ```
 
-技术栈：Next.js、React、TypeScript、Zod、SQLite；可选 Supabase 和 OpenAI 兼容模型接口。界面使用自定义 CSS。
+[使用教程](docs/tutorial.md) · [创作说明](docs/creation-note.md) · [演示脚本](docs/demo-script.md) · [原始技术方案](AI日程应用可行性与技术方案.md)
 
-按原始方案选择图文作为展示材料：[1000–2000 字教程](docs/tutorial.md)、[300 字以内创作说明](docs/creation-note.md)、[待录制演示脚本](docs/demo-script.md)。需求与后续路线保留在 [原始技术方案](AI日程应用可行性与技术方案.md)；其中未来规划不代表当前已实现功能。
+第三方组件许可证和 Qt 动态链接/重新构建说明见 [desktop/THIRD_PARTY_NOTICES.md](desktop/THIRD_PARTY_NOTICES.md)。

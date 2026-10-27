@@ -39,6 +39,9 @@
   ],
   "exclude": [
     "node_modules",
-    ".next/dev/types"
+    ".next/dev/types",
+    "desktop/**",
+    "android/**",
+    "artifacts/**"
   ]
 }
