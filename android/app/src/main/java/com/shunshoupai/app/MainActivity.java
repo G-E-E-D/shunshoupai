@@ -144,6 +144,20 @@ public final class MainActivity extends ComponentActivity {
         }
     }
 
+    @Override public void onWindowFocusChanged(boolean hasFocus) {
+        super.onWindowFocusChanged(hasFocus);
+        // The controller can be unavailable during onCreate. Apply icon contrast
+        // after the window attaches so edge-to-edge status icons stay readable.
+        if (hasFocus && Build.VERSION.SDK_INT >= 30) {
+            WindowInsetsController controller = getWindow().getDecorView().getWindowInsetsController();
+            if (controller != null) {
+                int light = WindowInsetsController.APPEARANCE_LIGHT_STATUS_BARS
+                    | WindowInsetsController.APPEARANCE_LIGHT_NAVIGATION_BARS;
+                controller.setSystemBarsAppearance(light, light);
+            }
+        }
+    }
+
     @SuppressWarnings("deprecation")
     // React requires JavaScript. Navigation is restricted to the configured
     // origin, file/content access is disabled, and no native JS bridge exists.
