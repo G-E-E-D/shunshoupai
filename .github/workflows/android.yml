@@ -35,8 +35,6 @@ jobs:
       signed: ${{ steps.package.outputs.signed }}
       version: ${{ steps.metadata.outputs.version }}
       version_code: ${{ steps.metadata.outputs.version_code }}
-      apk_name: ${{ steps.metadata.outputs.apk_name }}
-      artifact_name: ${{ steps.metadata.outputs.artifact_name }}
     defaults:
       run:
         working-directory: android
@@ -155,6 +153,26 @@ jobs:
           node-version: 24
           cache: npm
       - uses: gradle/actions/setup-gradle@v6
+      - name: Derive release asset names in this job
+        id: release_metadata
+        env:
+          BUILT_VERSION: ${{ needs.build.outputs.version }}
+          BUILT_VERSION_CODE: ${{ needs.build.outputs.version_code }}
+        run: |
+          chmod +x gradlew
+          ./gradlew --no-daemon :app:writeReleaseMetadata
+          python3 - <<'PY'
+          import json, os
+          from pathlib import Path
+          metadata = json.loads(Path('app/build/release-metadata.json').read_text())
+          assert metadata['version_name'] == os.environ['BUILT_VERSION'], 'Build and emulator versions must match'
+          assert str(metadata['version_code']) == os.environ['BUILT_VERSION_CODE'], 'Build and emulator version codes must match'
+          # Keep full public names within this job: GitHub may mask a matching
+          # signing alias and suppress those names when exported across jobs.
+          with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
+              for key in ('apk_name', 'artifact_name'):
+                  output.write(f'{key}={metadata[key]}\n')
+          PY
       - name: Prepare live application backend
         working-directory: .
         run: |
@@ -186,7 +204,7 @@ jobs:
       - uses: actions/download-artifact@v6
         if: needs.build.outputs.signed == 'true'
         with:
-          name: ${{ needs.build.outputs.artifact_name }}
+          name: ${{ steps.release_metadata.outputs.artifact_name }}
           path: android/release
       - name: Enable Android emulator acceleration
         run: |
@@ -198,7 +216,7 @@ jobs:
         uses: reactivecircus/android-emulator-runner@4c44018e59b437e86cdfc41da381398f93ed8808 # v2
         env:
           HAS_SIGNED_RELEASE: ${{ needs.build.outputs.signed }}
-          RELEASE_APK_NAME: ${{ needs.build.outputs.apk_name }}
+          RELEASE_APK_NAME: ${{ steps.release_metadata.outputs.apk_name }}
           EXPECTED_VERSION_NAME: ${{ needs.build.outputs.version }}
           EXPECTED_VERSION_CODE: ${{ needs.build.outputs.version_code }}
         with:
