@@ -103,4 +103,8 @@ docs/           运行、构建、教程和验收文档
 
 [使用教程](docs/tutorial.md) · [创作说明](docs/creation-note.md) · [演示脚本](docs/demo-script.md) · [原始技术方案](AI日程应用可行性与技术方案.md)
 
-第三方组件许可证和 Qt 动态链接/重新构建说明见 [desktop/THIRD_PARTY_NOTICES.md](desktop/THIRD_PARTY_NOTICES.md)。
+## 开源协议
+
+本项目原创代码采用 [MIT License](LICENSE)，Copyright (c) 2026 G-E-E-D。
+
+第三方组件继续遵循各自的许可证。第三方组件许可证和 Qt 动态链接/重新构建说明见 [desktop/THIRD_PARTY_NOTICES.md](desktop/THIRD_PARTY_NOTICES.md)。
