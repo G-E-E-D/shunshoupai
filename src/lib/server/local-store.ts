@@ -10,6 +10,15 @@ type User = { id: string; email: string };
 type EventRow = ScheduleEvent & { user_id: string };
 type EventPatch = { title?: string; start_local?: string; end_local?: string; status?: "planned" | "completed" };
 type CommitResult = { events: ScheduleEvent[]; replayed: boolean };
+export type ModelSettingRecord = {
+  base_url: string | null;
+  model: string | null;
+  api_key_ciphertext: string | null;
+  key_hint: string | null;
+  version: number;
+  updated_at: string;
+  deleted_at: string | null;
+};
 
 function hash(value: string) {
   return createHash("sha256").update(value).digest("hex");
@@ -60,6 +69,13 @@ export class LocalStore {
         user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
         usage_day TEXT NOT NULL, count INTEGER NOT NULL,
         PRIMARY KEY(user_id, usage_day)
+      );
+      CREATE TABLE IF NOT EXISTS model_settings (
+        user_id TEXT PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+        base_url TEXT, model TEXT, api_key_ciphertext TEXT, key_hint TEXT,
+        version INTEGER NOT NULL CHECK(version > 0),
+        updated_at TEXT NOT NULL, deleted_at TEXT,
+        CHECK(deleted_at IS NOT NULL OR (base_url IS NOT NULL AND model IS NOT NULL AND api_key_ciphertext IS NOT NULL AND key_hint IS NOT NULL))
       );
     `);
   }
@@ -202,6 +218,44 @@ export class LocalStore {
       this.db.prepare(`INSERT INTO ai_usage(user_id,usage_day,count) VALUES (?,?,1)
         ON CONFLICT(user_id,usage_day) DO UPDATE SET count=count+1`).run(userId, day);
       return true;
+    });
+  }
+
+  modelSetting(userId: string): ModelSettingRecord | null {
+    const row = this.db.prepare("SELECT base_url,model,api_key_ciphertext,key_hint,version,updated_at,deleted_at FROM model_settings WHERE user_id=?")
+      .get(userId) as ModelSettingRecord | undefined;
+    return row ?? null;
+  }
+
+  saveModelSetting(userId: string, baseVersion: number, input: {
+    base_url: string; model: string; api_key_ciphertext: string; key_hint: string;
+  }): ModelSettingRecord {
+    return this.transaction(() => {
+      const previous = this.modelSetting(userId);
+      if ((previous?.version ?? 0) !== baseVersion) throw new AppError("VERSION_CONFLICT", "模型设置已在另一端更新，请重新加载后再保存。", 409);
+      const updated = new Date().toISOString();
+      this.db.prepare(`INSERT INTO model_settings(user_id,base_url,model,api_key_ciphertext,key_hint,version,updated_at,deleted_at)
+        VALUES(?,?,?,?,?,?,?,NULL) ON CONFLICT(user_id) DO UPDATE SET
+        base_url=excluded.base_url,model=excluded.model,api_key_ciphertext=excluded.api_key_ciphertext,
+        key_hint=excluded.key_hint,version=excluded.version,updated_at=excluded.updated_at,deleted_at=NULL`)
+        .run(userId, input.base_url, input.model, input.api_key_ciphertext, input.key_hint, baseVersion + 1, updated);
+      return this.modelSetting(userId)!;
+    });
+  }
+
+  deleteModelSetting(userId: string, baseVersion: number): ModelSettingRecord | null {
+    return this.transaction(() => {
+      const previous = this.modelSetting(userId);
+      if (!previous) {
+        if (baseVersion !== 0) throw new AppError("VERSION_CONFLICT", "模型设置已在另一端更新，请重新加载后再操作。", 409);
+        return null;
+      }
+      if (previous.deleted_at && (previous.version === baseVersion || previous.version === baseVersion + 1)) return previous;
+      if (previous.version !== baseVersion) throw new AppError("VERSION_CONFLICT", "模型设置已在另一端更新，请重新加载后再操作。", 409);
+      const now = new Date().toISOString();
+      this.db.prepare(`UPDATE model_settings SET base_url=NULL,model=NULL,api_key_ciphertext=NULL,key_hint=NULL,
+        version=version+1,updated_at=?,deleted_at=? WHERE user_id=? AND version=?`).run(now, now, userId, baseVersion);
+      return this.modelSetting(userId);
     });
   }
 }

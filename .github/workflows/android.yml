@@ -68,15 +68,15 @@ jobs:
         if: github.event_name != 'pull_request'
         run: |
           mkdir -p release
-          cp app/build/outputs/apk/release/app-release.apk release/shunshoupai-android-v1.1.0.apk
-          "$ANDROID_HOME/build-tools/35.0.0/apksigner" verify --verbose --print-certs release/shunshoupai-android-v1.1.0.apk | tee release/signing-cert.txt
+          cp app/build/outputs/apk/release/app-release.apk release/shunshoupai-android-v1.2.0.apk
+          "$ANDROID_HOME/build-tools/35.0.0/apksigner" verify --verbose --print-certs release/shunshoupai-android-v1.2.0.apk | tee release/signing-cert.txt
           cd release
-          sha256sum shunshoupai-android-v1.1.0.apk > SHA256SUMS.txt
+          sha256sum shunshoupai-android-v1.2.0.apk > SHA256SUMS.txt
           echo 'signed=true' >> "$GITHUB_OUTPUT"
       - uses: actions/upload-artifact@v6
         if: github.event_name != 'pull_request'
         with:
-          name: shunshoupai-android-release-v1.1.0
+          name: shunshoupai-android-release-v1.2.0
           path: android/release/
           if-no-files-found: error
       - uses: actions/upload-artifact@v6
@@ -138,7 +138,7 @@ jobs:
       - uses: actions/download-artifact@v6
         if: needs.build.outputs.signed == 'true'
         with:
-          name: shunshoupai-android-release-v1.1.0
+          name: shunshoupai-android-release-v1.2.0
           path: android/release
       - name: Enable Android emulator acceleration
         run: |

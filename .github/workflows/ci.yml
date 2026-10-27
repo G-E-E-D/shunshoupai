@@ -31,9 +31,14 @@ jobs:
       - name: Create disposable authentication fixtures
         run: docker exec -i ${{ job.services.postgres.id }} psql -U postgres -v ON_ERROR_STOP=1 < supabase/tests/bootstrap.sql
       - name: Apply migration
-        run: docker exec -i ${{ job.services.postgres.id }} psql -U postgres -v ON_ERROR_STOP=1 < supabase/migrations/20261027000000_initial.sql
+        run: |
+          for migration in supabase/migrations/*.sql; do
+            docker exec -i ${{ job.services.postgres.id }} psql -U postgres -v ON_ERROR_STOP=1 < "$migration"
+          done
       - name: Check database invariants
-        run: docker exec -i ${{ job.services.postgres.id }} psql -U postgres -v ON_ERROR_STOP=1 < supabase/tests/invariants.sql
+        run: |
+          docker exec -i ${{ job.services.postgres.id }} psql -U postgres -v ON_ERROR_STOP=1 < supabase/tests/invariants.sql
+          docker exec -i ${{ job.services.postgres.id }} psql -U postgres -v ON_ERROR_STOP=1 < supabase/tests/model-settings.sql
 
   check:
     runs-on: ubuntu-24.04

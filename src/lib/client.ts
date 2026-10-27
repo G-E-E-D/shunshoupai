@@ -16,7 +16,7 @@ export async function api<T>(url: string, init?: RequestInit): Promise<T> {
   const controller = new AbortController();
   const timer = setTimeout(
     () => controller.abort(),
-    url.includes("/ai/") ? 35000 : 20000,
+    url.includes("/ai/") || url.includes("/model-settings") ? 35000 : 20000,
   );
   try {
     const response = await fetch(url, {

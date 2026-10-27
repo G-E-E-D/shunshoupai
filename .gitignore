@@ -22,5 +22,7 @@ artifacts/
 *.jks
 *.keystore
 *.p12
+model-encryption.key
+model-encryption.key.*.tmp
 AI应用开发实习生（内容方向）- 笔试 - 飞书云文档.html
 AI应用开发实习生（内容方向）- 笔试 - 飞书云文档_files/

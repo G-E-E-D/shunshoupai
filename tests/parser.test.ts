@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
+import { createServer } from "node:http";
 import type { EventDraft, ScheduleEvent } from "../src/lib/types";
 import { parseText, parseWithRules } from "../src/lib/parser";
 import { commitSchema, eventDraftSchema, patchEventSchema } from "../src/lib/schemas";
@@ -123,16 +124,26 @@ test("parser warns about past time, busy intervals and draft clashes", async () 
 });
 
 test("model adapter validates output and never substitutes rule success for API errors", async () => {
-  const oldFetch = globalThis.fetch;
   const oldKey = process.env.AI_API_KEY;
+  const oldBase = process.env.AI_BASE_URL;
+  const oldAllowed = process.env.AI_ALLOWED_PRIVATE_HOSTS;
   process.env.AI_API_KEY = "test-placeholder-never-a-real-key";
+  process.env.AI_ALLOWED_PRIVATE_HOSTS = "127.0.0.1";
   let lastBody: { messages: { content: string }[] } | undefined;
-  const setContent = (content: unknown) => {
-    globalThis.fetch = (async (_input: unknown, init?: RequestInit) => {
-      lastBody = JSON.parse(String(init?.body));
-      return new Response(JSON.stringify({ choices: [{ message: { content } }] }), { status: 200 });
-    }) as typeof fetch;
-  };
+  let content: unknown;
+  let status = 200;
+  let hits = 0;
+  const server = createServer(async (request, response) => {
+    hits++;
+    const chunks: Buffer[] = [];
+    for await (const chunk of request) chunks.push(chunk);
+    lastBody = JSON.parse(Buffer.concat(chunks).toString());
+    response.writeHead(status, { "Content-Type": "application/json" });
+    response.end(status === 200 ? JSON.stringify({ choices: [{ message: { content } }] }) : "upstream secret error never exposed");
+  });
+  await new Promise<void>(resolve => server.listen(0, "127.0.0.1", resolve));
+  process.env.AI_BASE_URL = `http://127.0.0.1:${(server.address() as { port: number }).port}`;
+  const setContent = (next: unknown) => { content = next; };
   try {
     setContent(JSON.stringify({ intent: "create_events", needs_clarification: false, questions: [], events: [sample] }));
     const result = await parseText("明天下午三点到四点面试", NOW);
@@ -143,14 +154,52 @@ test("model adapter validates output and never substitutes rule success for API 
       setContent(content);
       await assert.rejects(parseText("明天下午三点到四点面试", NOW));
     }
-    globalThis.fetch = (async () => new Response("upstream secret error never exposed", { status: 500 })) as typeof fetch;
+    status = 500;
     await assert.rejects(parseText("明天下午三点到四点面试", NOW), /HTTP 500/);
     // Semantic limits are checked even when a model could confidently invent a time.
-    globalThis.fetch = (async () => { throw new Error("must not call model for ambiguous or unsupported input"); }) as typeof fetch;
+    const previousHits = hits;
     assert.equal((await parseText("周五三点面试", NOW)).needs_clarification, true);
     assert.equal((await parseText("每周一下午三点面试", NOW)).needs_clarification, true);
+    assert.equal(hits, previousHits);
+    assert.ok(lastBody?.messages[0].content.startsWith("你是日程整理器"));
   } finally {
-    globalThis.fetch = oldFetch;
+    server.closeAllConnections();
+    await new Promise<void>(resolve => server.close(() => resolve()));
     if (oldKey === undefined) delete process.env.AI_API_KEY; else process.env.AI_API_KEY = oldKey;
+    if (oldBase === undefined) delete process.env.AI_BASE_URL; else process.env.AI_BASE_URL = oldBase;
+    if (oldAllowed === undefined) delete process.env.AI_ALLOWED_PRIVATE_HOSTS; else process.env.AI_ALLOWED_PRIVATE_HOSTS = oldAllowed;
+  }
+});
+
+test("personal credentials override server defaults while the system prompt stays fixed", async () => {
+  const old = { key: process.env.AI_API_KEY, base: process.env.AI_BASE_URL, model: process.env.AI_MODEL, allowed: process.env.AI_ALLOWED_PRIVATE_HOSTS };
+  const requests: { authorization: string | undefined; body: { model: string; messages: { role: string; content: string }[] } }[] = [];
+  const server = createServer(async (request, response) => {
+    const chunks: Buffer[] = [];
+    for await (const chunk of request) chunks.push(chunk);
+    requests.push({ authorization: request.headers.authorization, body: JSON.parse(Buffer.concat(chunks).toString()) });
+    response.end(JSON.stringify({ choices: [{ message: { content: JSON.stringify({ needs_clarification: false, questions: [], events: [sample] }) } }] }));
+  });
+  await new Promise<void>(resolve => server.listen(0, "127.0.0.1", resolve));
+  const baseUrl = `http://127.0.0.1:${(server.address() as { port: number }).port}/v1`;
+  Object.assign(process.env, { AI_API_KEY: "server-test-secret-only", AI_BASE_URL: baseUrl, AI_MODEL: "server-model", AI_ALLOWED_PRIVATE_HOSTS: "127.0.0.1" });
+  try {
+    await parseText("明天下午三点到四点面试", NOW);
+    await parseText("明天下午三点到四点面试", NOW, [], { baseUrl, apiKey: "personal-test-secret-only", model: "personal-model" });
+    assert.equal(requests[0].authorization, "Bearer server-test-secret-only");
+    assert.equal(requests[0].body.model, "server-model");
+    assert.equal(requests[1].authorization, "Bearer personal-test-secret-only");
+    assert.equal(requests[1].body.model, "personal-model");
+    assert.equal(requests[1].body.messages[0].role, "system");
+    assert.equal(requests[0].body.messages[0].content, requests[1].body.messages[0].content);
+    assert.ok(requests[1].body.messages[0].content.startsWith("你是日程整理器"));
+    assert.equal((await parseText("明天下午三点到四点面试", NOW, [], null)).provider, "rules");
+    assert.equal(requests.length, 2);
+  } finally {
+    server.closeAllConnections();
+    await new Promise<void>(resolve => server.close(() => resolve()));
+    for (const [name, value] of Object.entries({ AI_API_KEY: old.key, AI_BASE_URL: old.base, AI_MODEL: old.model, AI_ALLOWED_PRIVATE_HOSTS: old.allowed })) {
+      if (value === undefined) delete process.env[name]; else process.env[name] = value;
+    }
   }
 });

@@ -39,6 +39,11 @@ import android.widget.Toast;
 
 import androidx.activity.ComponentActivity;
 import androidx.activity.OnBackPressedCallback;
+import androidx.activity.result.ActivityResultLauncher;
+
+import com.google.zxing.client.android.Intents;
+import com.journeyapps.barcodescanner.ScanContract;
+import com.journeyapps.barcodescanner.ScanOptions;
 
 import java.net.URI;
 
@@ -64,6 +69,17 @@ public final class MainActivity extends ComponentActivity {
     private String mainFrameUrl = "";
     private boolean mainFrameFailed;
     private boolean changingServer;
+
+    private final ActivityResultLauncher<ScanOptions> qrScanner = registerForActivityResult(new ScanContract(), result -> {
+        if (result.getContents() != null) {
+            handleScanResult(result.getContents());
+        } else if (result.getOriginalIntent() != null
+                && result.getOriginalIntent().getBooleanExtra(Intents.Scan.MISSING_CAMERA_PERMISSION, false)) {
+            showScanHelp(R.string.scan_camera_denied);
+        } else {
+            handleScanResult(null);
+        }
+    });
 
     private final Runnable loadTimeout = () -> {
         if (webView != null && progress.getVisibility() == View.VISIBLE) {
@@ -91,6 +107,7 @@ public final class MainActivity extends ComponentActivity {
         configureWebView();
 
         connectButton.setOnClickListener(view -> connectFromInput());
+        findViewById(R.id.scan_button).setOnClickListener(view -> startQrScanner());
         serverInput.setOnEditorActionListener((view, actionId, event) -> {
             if (actionId == EditorInfo.IME_ACTION_GO) { connectFromInput(); return true; }
             return false;
@@ -176,7 +193,7 @@ public final class MainActivity extends ComponentActivity {
         settings.setSafeBrowsingEnabled(true);
         settings.setSaveFormData(false);
         settings.setSavePassword(false);
-        settings.setUserAgentString(settings.getUserAgentString() + " ShunshoupaiAndroid/1.1");
+        settings.setUserAgentString(settings.getUserAgentString() + " ShunshoupaiAndroid/" + BuildConfig.VERSION_NAME);
         CookieManager.getInstance().setAcceptCookie(true);
         CookieManager.getInstance().setAcceptThirdPartyCookies(webView, false);
         WebView.setWebContentsDebuggingEnabled((getApplicationInfo().flags & ApplicationInfo.FLAG_DEBUGGABLE) != 0);
@@ -256,6 +273,50 @@ public final class MainActivity extends ComponentActivity {
                 return true;
             }
         });
+    }
+
+    private void startQrScanner() {
+        if (changingServer) return;
+        hideKeyboard();
+        connectionError.setVisibility(View.GONE);
+        ScanOptions options = new ScanOptions();
+        options.setDesiredBarcodeFormats(ScanOptions.QR_CODE);
+        options.setCaptureActivity(QrCaptureActivity.class);
+        options.setPrompt(getString(R.string.scan_prompt));
+        options.setBeepEnabled(false);
+        options.setBarcodeImageEnabled(false);
+        options.setOrientationLocked(false);
+        options.addExtra(Intents.Scan.SHOW_MISSING_CAMERA_PERMISSION_DIALOG, false);
+        try {
+            qrScanner.launch(options);
+        } catch (ActivityNotFoundException | SecurityException error) {
+            showScanHelp(R.string.scan_unavailable);
+        }
+    }
+
+    /** QR data is untrusted input and always enters the same service validation flow. */
+    void handleScanResult(String contents) {
+        if (isFinishing() || isDestroyed() || changingServer) return;
+        if (contents == null) {
+            Toast.makeText(this, R.string.scan_cancelled, Toast.LENGTH_SHORT).show();
+            return;
+        }
+        final String scanned;
+        try {
+            scanned = ServerAddress.normalize(contents);
+        } catch (IllegalArgumentException error) {
+            showScanHelp(R.string.scan_invalid);
+            return;
+        }
+        serverInput.setText(scanned);
+        connectionError.setVisibility(View.GONE);
+        connectFromInput();
+    }
+
+    private void showScanHelp(int message) {
+        if (isFinishing() || isDestroyed()) return;
+        connectionError.setText(message);
+        connectionError.setVisibility(View.VISIBLE);
     }
 
     private void connectFromInput() {

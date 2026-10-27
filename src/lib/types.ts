@@ -31,6 +31,17 @@ export interface SessionInfo {
   mode: "local" | "supabase";
   ai_provider: "model" | "rules";
 }
+export interface ModelSettingsInfo {
+  configured: boolean;
+  base_url: string;
+  model: string;
+  has_api_key: boolean;
+  key_hint: string | null;
+  version: number;
+  updated_at: string | null;
+  effective_source: "personal" | "server" | "rules";
+  encryption_available: boolean;
+}
 export interface ApiErrorBody {
   error: { code: string; message: string; details?: unknown };
 }

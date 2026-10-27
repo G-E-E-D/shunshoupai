@@ -196,9 +196,34 @@ public class ConnectionInstrumentedTest {
         evaluate("Array.from(document.querySelectorAll('.view-switch button')).find(el=>el.textContent==='七天').click()");
         waitUntil("The real seven-day workbench should display all three saved events",
                 () -> "true".equals(evaluate("document.querySelectorAll('.event-main h3').length===3")));
+        evaluate("document.querySelector('header button[aria-label=\"打开账号设置\"]').click()");
+        waitUntil("Android account settings should offer personal model configuration",
+                () -> "true".equals(evaluate("Array.from(document.querySelectorAll('[role=\"dialog\"] button')).some(el=>el.textContent.trim()==='模型设置')")));
+        evaluate("Array.from(document.querySelectorAll('[role=\"dialog\"] button')).find(el=>el.textContent.trim()==='模型设置').click()");
+        waitUntil("The shared model settings form must work inside the Android client",
+                () -> "true".equals(evaluate("Boolean(document.querySelector('[role=\"dialog\"][aria-label=\"模型设置\"]')) && Array.from(document.querySelectorAll('[role=\"dialog\"] label')).some(el=>el.textContent.includes('API Key')) && Array.from(document.querySelectorAll('[role=\"dialog\"] label')).some(el=>el.textContent.includes('Base URL'))")));
+        evaluate("document.querySelector('[role=\"dialog\"][aria-label=\"模型设置\"] button[aria-label^=\"关闭\"]').click()");
         evaluate("document.querySelector('.agenda-card').scrollIntoView({block:'start',behavior:'instant'})");
         SystemClock.sleep(350);
         captureWorkspaceScreenshot();
+    }
+
+    @Test
+    public void scannedServiceUrlUsesExistingValidationAndConnectsToTheSelectedServer() throws IOException {
+        fixture = new HttpFixture();
+        fixture.start();
+        scenario = ActivityScenario.launch(MainActivity.class);
+        scenario.onActivity(activity -> activity.handleScanResult("javascript:alert('not-a-service')"));
+        assertEquals(View.VISIBLE, read(a -> a.findViewById(R.id.setup_screen).getVisibility()).intValue());
+        Context context = InstrumentationRegistry.getInstrumentation().getTargetContext();
+        assertFalse("An invalid QR value must not become a remembered service",
+                context.getSharedPreferences("connection", Context.MODE_PRIVATE).contains("server_url"));
+        scenario.onActivity(activity -> activity.handleScanResult(fixture.origin()));
+        waitUntil("A valid scanned URL should connect without manually retyping it",
+                () -> "Fixture ready".equals(webTitle()));
+        assertEquals(View.GONE, read(a -> a.findViewById(R.id.setup_screen).getVisibility()).intValue());
+        assertTrue(context.getSharedPreferences("connection", Context.MODE_PRIVATE)
+                .getString("server_url", "").startsWith(fixture.origin()));
     }
 
     @Test

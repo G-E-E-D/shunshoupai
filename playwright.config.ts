@@ -34,6 +34,8 @@ export default defineConfig({
       APP_DB_PATH: "test-results/e2e.sqlite",
       NEXT_DIST_DIR: ".next-e2e",
       AI_API_KEY: "",
+      AI_ALLOWED_PRIVATE_HOSTS: "127.0.0.1,localhost",
+      MODEL_SETTINGS_ENCRYPTION_KEY: Buffer.alloc(32, 7).toString("base64"),
       COOKIE_SECURE: "false",
       APP_ORIGIN: "",
     },

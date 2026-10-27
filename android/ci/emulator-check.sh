@@ -7,7 +7,7 @@ trap 'adb logcat -d -b crash > "$report_dir/crashes.txt" 2>/dev/null || true' EX
 
 if [ "${HAS_SIGNED_RELEASE:-false}" = 'true' ]; then
   adb logcat -c
-  adb install -r release/shunshoupai-android-v1.1.0.apk
+  adb install -r release/shunshoupai-android-v1.2.0.apk
   adb shell am start -W -n com.shunshoupai.app/.MainActivity | tee "$report_dir/launch.txt"
   grep -q 'Status: ok' "$report_dir/launch.txt"
   sleep 3

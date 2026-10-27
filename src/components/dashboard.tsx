@@ -26,6 +26,8 @@ import {
   Coffee,
   Edit3,
   HelpCircle,
+  KeyRound,
+  QrCode,
   LayoutDashboard,
   LoaderCircle,
   LogOut,
@@ -45,7 +47,10 @@ import type {
   ParseResult,
   ScheduleEvent,
   SessionInfo,
+  ModelSettingsInfo,
 } from "@/lib/types";
+import ModelSettingsPanel from "@/components/model-settings";
+import ConnectionPanel from "@/components/connection-panel";
 import { commitSchema } from "@/lib/schemas";
 import {
   api,
@@ -89,11 +94,13 @@ function Modal({
   subtitle,
   children,
   close,
+  wide = false,
 }: {
   title: string;
   subtitle?: string;
   children: ReactNode;
   close: () => void;
+  wide?: boolean;
 }) {
   const ref = useRef<HTMLDivElement>(null);
   useEffect(() => {
@@ -140,7 +147,7 @@ function Modal({
     >
       <div
         ref={ref}
-        className="modal"
+        className={wide ? "modal modal-wide" : "modal"}
         role="dialog"
         aria-modal="true"
         aria-label={title}
@@ -380,6 +387,11 @@ export default function Dashboard({ initialDay }: { initialDay: string }) {
   const [ready, setReady] = useState(false);
   const [authOpen, setAuthOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [modelSettingsOpen, setModelSettingsOpen] = useState(false);
+  const [connectionOpen, setConnectionOpen] = useState(false);
+  const [modelSettings, setModelSettings] = useState<ModelSettingsInfo | null>(
+    null,
+  );
   const [helpOpen, setHelpOpen] = useState(false);
   const [mobileNav, setMobileNav] = useState(false);
   const [view, setView] = useState<View>("day");
@@ -409,11 +421,14 @@ export default function Dashboard({ initialDay }: { initialDay: string }) {
   const authEpoch = useRef(0);
   const actionLock = useRef(false);
   const userRef = useRef<string | null>(null);
+  const modelVersion = useRef(0);
   const userId = session.user?.id;
   const draftKey = `shunshoupai-draft-${userId || "guest"}`;
   const pendingKey = `shunshoupai-pending-${userId || "guest"}`;
   const closeAuth = useCallback(() => setAuthOpen(false), []);
   const closeSettings = useCallback(() => setSettingsOpen(false), []);
+  const closeModelSettings = useCallback(() => setModelSettingsOpen(false), []);
+  const closeConnection = useCallback(() => setConnectionOpen(false), []);
   const closeHelp = useCallback(() => setHelpOpen(false), []);
   const closeEditor = useCallback(() => {
     if (!actionLock.current) setEditor(null);
@@ -442,6 +457,25 @@ export default function Dashboard({ initialDay }: { initialDay: string }) {
     };
   }, []);
 
+  const refreshModelSettings = useCallback(async () => {
+    if (!userId) return;
+    try {
+      const { settings } = await api<{ settings: ModelSettingsInfo }>(
+        "/api/model-settings",
+      );
+      if (userRef.current !== userId) return;
+      if (settings.version < modelVersion.current) return;
+      modelVersion.current = settings.version;
+      setModelSettings(settings);
+      setSession((s) => ({
+        ...s,
+        ai_provider: settings.effective_source === "rules" ? "rules" : "model",
+      }));
+    } catch {
+      /* The settings form displays configuration errors without blocking the calendar. */
+    }
+  }, [userId]);
+
   const refresh = useCallback(
     async (quiet = false) => {
       if (!userId) return;
@@ -458,6 +492,7 @@ export default function Dashboard({ initialDay }: { initialDay: string }) {
         setEvents(result.events);
         setLastSync(new Date());
         setSyncError("");
+        void refreshModelSettings();
       } catch (error) {
         if (requestNumber !== sequence.current || userRef.current !== userId)
           return;
@@ -473,7 +508,7 @@ export default function Dashboard({ initialDay }: { initialDay: string }) {
         if (requestNumber === sequence.current) setSyncing(false);
       }
     },
-    [selectedDay, userId],
+    [selectedDay, userId, refreshModelSettings],
   );
 
   useEffect(() => {
@@ -503,6 +538,10 @@ export default function Dashboard({ initialDay }: { initialDay: string }) {
     setUncertain(false);
     setQuery("");
     setReminders([]);
+    setModelSettings(null);
+    modelVersion.current = 0;
+    setModelSettingsOpen(false);
+    setConnectionOpen(false);
     if (userId) {
       try {
         const savedText =
@@ -638,6 +677,7 @@ export default function Dashboard({ initialDay }: { initialDay: string }) {
       setSession((s) => ({ ...s, user: null }));
       setEvents([]);
       setSettingsOpen(false);
+      setModelSettingsOpen(false);
       setEditor(null);
       setNotice({ kind: "info", text: "已退出登录。" });
     } catch (error) {
@@ -1170,10 +1210,21 @@ export default function Dashboard({ initialDay }: { initialDay: string }) {
               </h1>
               <p>把脑子里的安排说出来，剩下的，顺手排。</p>
             </div>
-            <button className="secondary-button add-button" onClick={addNew}>
-              <Plus size={17} />
-              手动添加
-            </button>
+            <div className="heading-actions">
+              <button
+                className="secondary-button connect-phone-button"
+                onClick={() => {
+                  if (requireAuth()) setConnectionOpen(true);
+                }}
+              >
+                <QrCode size={17} />
+                手机连接
+              </button>
+              <button className="secondary-button add-button" onClick={addNew}>
+                <Plus size={17} />
+                手动添加
+              </button>
+            </div>
           </section>
           {(!online || syncError) && (
             <div className="connection-banner" role="status">
@@ -1854,7 +1905,9 @@ export default function Dashboard({ initialDay }: { initialDay: string }) {
               <span>解析方式</span>
               <strong>
                 {session.ai_provider === "model"
-                  ? "已连接模型 API"
+                  ? modelSettings?.effective_source === "personal"
+                    ? "个人模型（已配置）"
+                    : "服务端模型（已配置）"
                   : "有限规则解析（未接模型）"}
               </strong>
             </div>
@@ -1887,6 +1940,18 @@ export default function Dashboard({ initialDay }: { initialDay: string }) {
               />
             </div>
           </div>
+          <button
+            className="secondary-button wide model-settings-entry"
+            disabled={!userId || saving || parsing}
+            onClick={() => {
+              setSettingsOpen(false);
+              setModelSettingsOpen(true);
+            }}
+          >
+            <KeyRound size={16} />
+            模型设置
+            <ArrowRight size={15} />
+          </button>
           <p className="settings-note">
             提醒需要页面在前台活跃运行；锁屏、后台或关闭网页时，不提供系统级准点提醒。同一服务地址、同一账号可跨设备使用，日程在前台每
             8 秒和回到页面时刷新。
@@ -1912,6 +1977,37 @@ export default function Dashboard({ initialDay }: { initialDay: string }) {
               <ArrowRight size={16} />
             </button>
           )}
+        </Modal>
+      )}
+      {modelSettingsOpen && userId && (
+        <Modal
+          title="模型设置"
+          subtitle="用自己的模型整理日程，网页和安卓端共用同一份账号配置。"
+          close={closeModelSettings}
+          wide
+        >
+          <ModelSettingsPanel
+            key={userId}
+            onChanged={(settings) => {
+              if (userRef.current !== userId) return;
+              modelVersion.current = settings.version;
+              setModelSettings(settings);
+              setSession((s) => ({
+                ...s,
+                ai_provider:
+                  settings.effective_source === "rules" ? "rules" : "model",
+              }));
+            }}
+          />
+        </Modal>
+      )}
+      {connectionOpen && userId && (
+        <Modal
+          title="手机连接"
+          subtitle="在电脑展示二维码，用安卓应用扫码连接同一个日程服务。"
+          close={closeConnection}
+        >
+          <ConnectionPanel key={userId} />
         </Modal>
       )}
       {helpOpen && (

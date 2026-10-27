@@ -7,8 +7,14 @@
     <string name="server_label">你的服务地址</string>
     <string name="server_placeholder">http://192.168.1.20:3000</string>
     <string name="connect">连接，开始安排</string>
+    <string name="scan_connect">扫码连接</string>
+    <string name="scan_prompt">扫描电脑端顺手排的连接二维码</string>
+    <string name="scan_camera_denied">相机权限未开启。可在系统设置中允许相机权限，或继续手动填写服务地址。</string>
+    <string name="scan_cancelled">已取消扫码，仍可手动填写服务地址。</string>
+    <string name="scan_unavailable">暂时无法打开相机，请继续手动填写服务地址。</string>
+    <string name="scan_invalid">这个二维码不是有效的顺手排服务根地址。请扫描电脑端的连接二维码，或手动填写 HTTP(S) 地址。</string>
     <string name="setup_help_title">第一次连接？</string>
-    <string name="setup_steps">1. 在电脑按 README 启动顺手排服务。\n2. 手机与电脑连接同一局域网，填写电脑的 IP 和端口。\n3. 进入后注册或登录同一账号，日程就会同步。</string>
+    <string name="setup_steps">1. 在电脑按 README 启动顺手排服务。\n2. 手机与电脑连接同一局域网，扫描网页上的连接二维码，或填写电脑的 IP 和端口。\n3. 进入后注册或登录同一账号，日程就会同步。</string>
     <string name="setup_network_note">也可连接已部署的 HTTPS 服务。localhost 指向手机自身，不能代替电脑 IP。HTTP 只建议用于可信局域网。</string>
     <string name="setup_limits">此安装包是连接现有服务的安卓客户端，需要服务持续运行与网络连接。提醒仅在页面前台活跃时提供。页面无法显示时，请先更新 Android System WebView 或 Chrome。</string>
     <string name="cancel_connection_edit">返回日程</string>

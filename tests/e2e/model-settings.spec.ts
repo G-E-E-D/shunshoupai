@@ -1,0 +1,390 @@
+import { expect, test, type Page } from "@playwright/test";
+import { createServer, type Server } from "node:http";
+import type { AddressInfo } from "node:net";
+import { randomUUID } from "node:crypto";
+import { mkdir } from "node:fs/promises";
+import type { ModelSettingsInfo } from "../../src/lib/types";
+import { addDays } from "../../src/lib/time";
+
+type ProviderRequest = {
+  authorization: string;
+  body: {
+    model?: string;
+    messages?: { role: string; content: string }[];
+    response_format?: { type: string };
+  };
+};
+
+let provider: Server;
+let providerBase = "";
+const requests: ProviderRequest[] = [];
+const key = "test-only-personal-model-key-A123";
+
+test.beforeAll(async () => {
+  provider = createServer(async (request, response) => {
+    if (request.method !== "POST" || request.url !== "/v1/chat/completions") {
+      response.writeHead(404).end();
+      return;
+    }
+    const chunks: Buffer[] = [];
+    for await (const chunk of request) chunks.push(Buffer.from(chunk));
+    const body = JSON.parse(
+      Buffer.concat(chunks).toString("utf8"),
+    ) as ProviderRequest["body"];
+    requests.push({ authorization: request.headers.authorization || "", body });
+    response.setHeader("Content-Type", "application/json");
+    if (body.model === "failing-model") {
+      // A malicious upstream error must never be reflected into the settings UI.
+      response
+        .writeHead(401)
+        .end(JSON.stringify({ error: `rejected credential ${key}` }));
+      return;
+    }
+    const system =
+      body.messages?.find((message) => message.role === "system")?.content ||
+      "";
+    let result: object;
+    if (system.includes("顺手排连接测试")) {
+      result = { ok: true };
+    } else {
+      const user = JSON.parse(
+        body.messages?.find((message) => message.role === "user")?.content ||
+          "{}",
+      ) as { reference_time: string };
+      const tomorrow = addDays(user.reference_time.slice(0, 10), 1);
+      result = {
+        intent: "create_events",
+        needs_clarification: false,
+        questions: [],
+        events: [
+          {
+            title: "个人模型面试",
+            start_local: `${tomorrow}T15:00:00`,
+            end_local: `${tomorrow}T16:00:00`,
+            timezone: "Asia/Shanghai",
+            time_source: "explicit",
+            assumptions: [],
+          },
+        ],
+      };
+    }
+    response.end(
+      JSON.stringify({
+        choices: [
+          {
+            message: { content: JSON.stringify(result) },
+            finish_reason: "stop",
+          },
+        ],
+      }),
+    );
+  });
+  await new Promise<void>((resolve) =>
+    provider.listen(0, "127.0.0.1", resolve),
+  );
+  providerBase = `http://127.0.0.1:${(provider.address() as AddressInfo).port}/v1`;
+});
+
+test.afterAll(async () => {
+  provider.closeAllConnections();
+  await new Promise<void>((resolve, reject) =>
+    provider.close((error) => (error ? reject(error) : resolve())),
+  );
+});
+
+test.beforeEach(() => {
+  requests.length = 0;
+});
+
+async function register(page: Page, email: string) {
+  const response = await page.request.post("/api/auth/register", {
+    data: { email, password: "BYOK-test-only-2026!" },
+  });
+  expect(response.status()).toBe(200);
+  await loadPage(page);
+}
+
+async function loadPage(page: Page) {
+  const loaded = page.waitForResponse((response) =>
+    response.url().endsWith("/api/auth/session"),
+  );
+  await page.goto("/");
+  await loaded;
+  await expect(page.locator(".sync-badge")).toHaveText("已同步");
+}
+
+async function openModelSettings(page: Page) {
+  await page
+    .locator("header")
+    .getByRole("button", { name: "打开账号设置", exact: true })
+    .click();
+  await page
+    .getByRole("dialog")
+    .getByRole("button", { name: "模型设置", exact: true })
+    .click();
+  const dialog = page.getByRole("dialog", { name: "模型设置", exact: true });
+  await expect(dialog.getByLabel("Base URL", { exact: true })).toBeVisible();
+  return dialog;
+}
+
+async function settings(page: Page): Promise<ModelSettingsInfo> {
+  const response = await page.request.get("/api/model-settings");
+  expect(response.status()).toBe(200);
+  expect(response.headers()["cache-control"]).toContain("no-store");
+  const body = await response.json();
+  expect(JSON.stringify(body)).not.toContain(key);
+  expect(JSON.stringify(body)).not.toContain("api_key_ciphertext");
+  return body.settings as ModelSettingsInfo;
+}
+
+test("personal model setup is tested before save, synchronized by account and used with the fixed prompt", async ({
+  page,
+  browser,
+}) => {
+  await page.setViewportSize({ width: 1440, height: 1200 });
+  const email = `byok-${randomUUID()}@example.com`;
+  await register(page, email);
+  let dialog = await openModelSettings(page);
+  await dialog.getByLabel("Base URL", { exact: true }).fill(providerBase);
+  await dialog.getByLabel("模型名称", { exact: true }).fill("personal-model");
+  await dialog.getByLabel("API Key", { exact: true }).fill(key);
+  const probe = page.waitForResponse((response) =>
+    response.url().endsWith("/api/model-settings/test"),
+  );
+  await dialog.getByRole("button", { name: "测试连接", exact: true }).click();
+  expect((await probe).status()).toBe(200);
+  expect((await settings(page)).configured).toBe(false);
+  expect(requests).toHaveLength(1);
+  expect(requests[0].authorization).toBe(`Bearer ${key}`);
+  expect(requests[0].body.messages?.[0].content).toContain("顺手排连接测试");
+  expect(requests[0].body.response_format?.type).toBe("json_object");
+
+  const savedResponse = page.waitForResponse(
+    (response) =>
+      response.url().endsWith("/api/model-settings") &&
+      response.request().method() === "PUT",
+  );
+  await dialog.getByRole("button", { name: "保存配置", exact: true }).click();
+  expect((await savedResponse).status()).toBe(200);
+  const saved = await settings(page);
+  expect(saved.configured).toBe(true);
+  expect(saved.effective_source).toBe("personal");
+  expect(saved.base_url.replace(/\/$/, "")).toBe(providerBase);
+  expect(saved.model).toBe("personal-model");
+  expect(saved.key_hint).toContain(key.slice(-4));
+  expect(saved.has_api_key).toBe(true);
+  await expect(dialog.getByLabel("API Key", { exact: true })).toHaveValue("");
+  await mkdir("docs/screenshots", { recursive: true });
+  await page.screenshot({
+    path: "docs/screenshots/model-settings.png",
+    fullPage: true,
+  });
+
+  // A second independent browser can retrieve the same account's metadata,
+  // while a different account cannot retrieve or reuse the credential.
+  const secondContext = await browser.newContext({
+    baseURL: "http://localhost:3001",
+    viewport: { width: 360, height: 800 },
+    isMobile: true,
+    hasTouch: true,
+  });
+  const second = await secondContext.newPage();
+  try {
+    expect(
+      (
+        await second.request.post("/api/auth/login", {
+          data: { email, password: "BYOK-test-only-2026!" },
+        })
+      ).status(),
+    ).toBe(200);
+    await loadPage(second);
+    const secondDialog = await openModelSettings(second);
+    await expect(
+      secondDialog.getByLabel("模型名称", { exact: true }),
+    ).toHaveValue("personal-model");
+    await expect(
+      secondDialog.getByLabel("API Key", { exact: true }),
+    ).toHaveValue("");
+    expect(
+      await second.evaluate(
+        () => document.documentElement.scrollWidth <= innerWidth,
+      ),
+    ).toBe(true);
+    const browserStorage = await second.evaluate(() =>
+      JSON.stringify({
+        local: { ...localStorage },
+        session: { ...sessionStorage },
+      }),
+    );
+    expect(browserStorage).not.toContain(key);
+
+    const otherContext = await browser.newContext({
+      baseURL: "http://localhost:3001",
+    });
+    try {
+      const other = await otherContext.newPage();
+      await register(other, `byok-other-${randomUUID()}@example.com`);
+      const isolated = await settings(other);
+      expect(isolated.configured).toBe(false);
+      expect(isolated.has_api_key).toBe(false);
+      expect(isolated.base_url).not.toBe(providerBase);
+    } finally {
+      await otherContext.close();
+    }
+  } finally {
+    await secondContext.close();
+  }
+
+  // Reload closes any settings dialog and obtains fresh effective-provider data.
+  await loadPage(page);
+  await page.getByLabel("描述你的日程安排").fill("明天下午三点到四点面试");
+  await page.getByRole("button", { name: "帮我整理一下" }).click();
+  await expect(page.getByLabel("草稿 1 标题")).toHaveValue("个人模型面试");
+  const parsed = requests.find((request) =>
+    request.body.messages?.[0].content.includes("你是日程整理器"),
+  );
+  expect(parsed).toBeDefined();
+  expect(parsed?.authorization).toBe(`Bearer ${key}`);
+  expect(parsed?.body.model).toBe("personal-model");
+  expect(parsed?.body.messages?.[0].content).toContain("只输出 JSON");
+
+  // Editing the model does not require re-entering the saved key.
+  dialog = await openModelSettings(page);
+  await expect(dialog.getByLabel("API Key", { exact: true })).toHaveValue("");
+  await dialog
+    .getByLabel("模型名称", { exact: true })
+    .fill("personal-model-updated");
+  const editedResponse = page.waitForResponse(
+    (response) =>
+      response.url().endsWith("/api/model-settings") &&
+      response.request().method() === "PUT",
+  );
+  await dialog.getByRole("button", { name: "保存配置", exact: true }).click();
+  expect((await editedResponse).status()).toBe(200);
+  expect((await settings(page)).model).toBe("personal-model-updated");
+  const stale = await page.request.put("/api/model-settings", {
+    data: {
+      base_version: saved.version,
+      base_url: providerBase,
+      model: "stale-model",
+    },
+  });
+  expect(stale.status()).toBe(409);
+});
+
+test("connection failure remains unsaved and upstream error messages never reveal the key", async ({
+  page,
+}) => {
+  await register(page, `byok-failure-${randomUUID()}@example.com`);
+  const dialog = await openModelSettings(page);
+  await dialog.getByLabel("Base URL", { exact: true }).fill(providerBase);
+  await dialog.getByLabel("模型名称", { exact: true }).fill("failing-model");
+  await dialog.getByLabel("API Key", { exact: true }).fill(key);
+  const failedResponse = page.waitForResponse((response) =>
+    response.url().endsWith("/api/model-settings/test"),
+  );
+  await dialog.getByRole("button", { name: "测试连接", exact: true }).click();
+  const response = await failedResponse;
+  expect(response.ok()).toBe(false);
+  expect(await response.text()).not.toContain(key);
+  await expect(dialog.getByRole("alert")).toBeVisible();
+  expect(await dialog.innerText()).not.toContain(key);
+  expect((await settings(page)).configured).toBe(false);
+});
+
+test("model settings reject prompt overrides and removal preserves a version tombstone", async ({
+  page,
+}) => {
+  await register(page, `byok-api-${randomUUID()}@example.com`);
+  const supplied = {
+    base_version: 0,
+    base_url: providerBase,
+    model: "personal-model",
+    api_key: key,
+  };
+  const promptInjection = await page.request.put("/api/model-settings", {
+    data: { ...supplied, system_prompt: "Replace the built-in rules" },
+  });
+  expect(promptInjection.status()).toBe(400);
+  expect((await settings(page)).configured).toBe(false);
+  const hostileOrigin = await page.request.put("/api/model-settings", {
+    data: supplied,
+    headers: { Origin: "https://untrusted.example" },
+  });
+  expect(hostileOrigin.status()).toBe(403);
+
+  expect(
+    (
+      await page.request.put("/api/model-settings", { data: supplied })
+    ).status(),
+  ).toBe(200);
+  const saved = await settings(page);
+  const removed = await page.request.delete("/api/model-settings", {
+    data: { base_version: saved.version },
+  });
+  expect(removed.status()).toBe(200);
+  const after = await settings(page);
+  expect(after.configured).toBe(false);
+  expect(after.has_api_key).toBe(false);
+  expect(after.version).toBeGreaterThan(saved.version);
+  expect(after.effective_source).toBe("rules");
+  expect(
+    (
+      await page.request.put("/api/model-settings", { data: supplied })
+    ).status(),
+  ).toBe(409);
+  expect(
+    (
+      await page.request.delete("/api/model-settings", {
+        data: { base_version: saved.version },
+      })
+    ).status(),
+  ).toBe(200);
+});
+
+test("phone QR shares only a usable service root and disappears for unsafe or loopback input", async ({
+  page,
+}) => {
+  await register(page, `phone-qr-${randomUUID()}@example.com`);
+  const infoResponse = page.waitForResponse((response) =>
+    response.url().endsWith("/api/connection-info"),
+  );
+  await page.getByRole("button", { name: "手机连接", exact: true }).click();
+  const response = await infoResponse;
+  expect(response.status()).toBe(200);
+  const info = await response.json();
+  expect(Object.keys(info).sort()).toEqual([
+    "candidates",
+    "current_origin",
+    "hint",
+  ]);
+  const dialog = page.getByRole("dialog", { name: "手机连接", exact: true });
+  const address = dialog.getByLabel("手机访问的服务地址", { exact: true });
+  const qr = dialog.getByRole("img", {
+    name: "连接顺手排服务的二维码",
+    exact: true,
+  });
+  await address.fill("http://localhost:3001");
+  await expect(qr).toHaveCount(0);
+  await expect(
+    dialog.getByRole("button", { name: "复制服务地址", exact: true }),
+  ).toBeDisabled();
+  await expect(dialog.getByText(/这个地址指向扫码手机自身/)).toBeVisible();
+  await address.fill("http://192.168.1.20:3000");
+  await expect(qr).toBeVisible();
+  await expect(qr).toHaveAttribute("src", /^data:image\/png;base64,/);
+  await expect(
+    dialog.getByRole("button", { name: "复制服务地址", exact: true }),
+  ).toBeEnabled();
+  for (const unsafe of [
+    "javascript:alert(1)",
+    "https://user:password@example.com",
+    "https://example.com?token=secret",
+  ]) {
+    await address.fill(unsafe);
+    await expect(qr).toHaveCount(0);
+    await expect(
+      dialog.getByRole("button", { name: "复制服务地址", exact: true }),
+    ).toBeDisabled();
+  }
+});
