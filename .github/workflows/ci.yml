@@ -8,9 +8,13 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: validate-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   database:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 5
     services:
       postgres:
@@ -23,7 +27,7 @@ jobs:
           --health-timeout 5s
           --health-retries 10
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - name: Create disposable authentication fixtures
         run: docker exec -i ${{ job.services.postgres.id }} psql -U postgres -v ON_ERROR_STOP=1 < supabase/tests/bootstrap.sql
       - name: Apply migration
@@ -32,11 +36,11 @@ jobs:
         run: docker exec -i ${{ job.services.postgres.id }} psql -U postgres -v ON_ERROR_STOP=1 < supabase/tests/invariants.sql
 
   check:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
         with:
           node-version: 24
           cache: npm
@@ -45,9 +49,17 @@ jobs:
       - run: npm run typecheck
       - run: npm test
       - run: npm run build
-      - run: npx playwright install --with-deps chromium
-      - run: npm run test:e2e
-      - uses: actions/upload-artifact@v4
+      # GitHub's Ubuntu 24.04 image already includes stable Chrome and its OS
+      # dependencies. Use Playwright's supported channel instead of apt/CDN setup.
+      - name: Confirm preinstalled Chrome
+        run: google-chrome --version
+        timeout-minutes: 1
+      - name: Browser integration tests
+        run: npm run test:e2e
+        timeout-minutes: 5
+        env:
+          PLAYWRIGHT_CHANNEL: chrome
+      - uses: actions/upload-artifact@v6
         if: failure()
         with:
           name: browser-test-report

@@ -96,6 +96,7 @@ npm run test:e2e
 
 ```text
 src/app/                 响应式界面和 Route Handler API
+src/components/          可编辑草稿、日程与同步工作台
 src/lib/parser.ts        规则解析、真实模型适配和结构校验
 src/lib/server/          账号、SQLite/Supabase、事务与请求保护
 supabase/                云端迁移及 SQL 不变量测试

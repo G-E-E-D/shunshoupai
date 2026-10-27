@@ -18,7 +18,9 @@ export default defineConfig({
       name: "chromium",
       use: {
         ...devices["Desktop Chrome"],
-        channel: process.platform === "win32" ? "msedge" : undefined,
+        channel:
+          process.env.PLAYWRIGHT_CHANNEL ||
+          (process.platform === "win32" ? "msedge" : undefined),
       },
     },
   ],

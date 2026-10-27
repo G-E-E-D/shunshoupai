@@ -8,6 +8,7 @@ import { randomUUID } from "node:crypto";
 import { mkdir } from "node:fs/promises";
 import type { EventDraft, ScheduleEvent } from "../../src/lib/types";
 import { addDays, localToIso, shanghaiDate } from "../../src/lib/time";
+import { dayLabel } from "../../src/lib/client";
 
 const password = "Synthetic-demo-password-2026";
 const example =
@@ -359,4 +360,23 @@ test("a lost successful save response keeps its request id and retries without d
   expect(requestIds).toHaveLength(2);
   expect(requestIds[0]).toBe(requestIds[1]);
   expect(await list(page.request)).toHaveLength(1);
+});
+
+test("an open page follows Shanghai midnight without a hydration mismatch", async ({ page }) => {
+  const hydrationErrors: string[] = [];
+  page.on("pageerror", error => hydrationErrors.push(error.message));
+  page.on("console", message => {
+    if (message.type() === "error" && /hydrat|didn't match|server rendered|text content does not match/i.test(message.text())) {
+      hydrationErrors.push(message.text());
+    }
+  });
+  await page.clock.install({ time: new Date(`${today}T23:59:50+08:00`) });
+  const sessionLoaded = page.waitForResponse(response => response.url().endsWith("/api/auth/session") && response.request().method() === "GET");
+  await page.goto("/");
+  await sessionLoaded;
+  await expect(page.locator(".current-date strong")).toHaveText(dayLabel(today, true));
+  await page.clock.fastForward(31_000);
+  await expect(page.locator(".current-date strong")).toHaveText(dayLabel(addDays(today, 1), true));
+  await expect(page.locator(".current-date")).toContainText("今天");
+  expect(hydrationErrors).toEqual([]);
 });
