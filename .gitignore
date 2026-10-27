@@ -1,0 +1,15 @@
+node_modules/
+.next/
+out/
+.env*
+!.env.example
+data/
+*.sqlite*
+*.db
+*.tsbuildinfo
+playwright-report/
+test-results/
+*.log
+.DS_Store
+AI应用开发实习生（内容方向）- 笔试 - 飞书云文档.html
+AI应用开发实习生（内容方向）- 笔试 - 飞书云文档_files/
