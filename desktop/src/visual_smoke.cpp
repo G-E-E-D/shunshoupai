@@ -10,9 +10,12 @@
 #include <QDir>
 #include <QElapsedTimer>
 #include <QEvent>
+#include <QFrame>
+#include <QFontMetrics>
 #include <QJsonArray>
 #include <QKeyEvent>
 #include <QLineEdit>
+#include <QLabel>
 #include <QMouseEvent>
 #include <QPointer>
 #include <QPushButton>
@@ -238,6 +241,24 @@ int MainWindow::visualSmoke(const QString &directory) {
     if (events.size() != 3) return fail(43, "saved native/API fixtures were not visible in the real calendar query");
     composer->setPlainText(QString::fromUtf8("明天下午三点到四点讨论产品方案，晚上七点读书一小时。"));
     if (!capture(this, "main-desktop.png")) return fail(44, "native main window screenshot failed");
+    resize(1060, 720);
+    QApplication::processEvents();
+    if (!capture(this, "main-desktop-compact.png")) return fail(46, "compact native screenshot failed");
+    if (width() != 1060 || modeLabel->wordWrap()
+        || modeLabel->fontMetrics().horizontalAdvance(modeLabel->text()) > modeLabel->contentsRect().width())
+        return fail(47, "compact window must retain a fully visible single-line rules/model badge");
+    auto *bar = findChild<QFrame *>("appBar");
+    if (!bar) return fail(48, "native app bar missing");
+    for (auto *action : bar->findChildren<QAbstractButton *>()) {
+        if (!action->isVisible()) continue;
+        const QRect bounds(action->mapTo(this, QPoint(0, 0)), action->size());
+        if (!rect().contains(bounds)) return fail(49, "compact header action extends beyond the native window");
+    }
+    if (accountLabel->wordWrap() || accountLabel->height() < accountLabel->fontMetrics().height()
+        || accountLabel->fontMetrics().horizontalAdvance(accountLabel->text()) > accountLabel->contentsRect().width()
+        || accountLabel->toolTip() != email)
+        return fail(50, "compact account summary must fit and retain the full email in its tooltip");
+    std::cout << "PASS: 1060px header actions and single-line provider badge fit; account summary elides with full tooltip\n";
     std::cout << "PASS: actual native login/register; event editor -> editable drafts -> saved event; model/phone/service dialogs; calendar mouse and keyboard; rendered main calendar\n";
     return 0;
 }

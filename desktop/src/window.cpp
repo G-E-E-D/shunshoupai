@@ -18,6 +18,7 @@
 #include <QFile>
 #include <QFormLayout>
 #include <QFrame>
+#include <QFontMetrics>
 #include <QGridLayout>
 #include <QHeaderView>
 #include <QImage>
@@ -27,6 +28,7 @@
 #include <QMessageBox>
 #include <QPainter>
 #include <QPushButton>
+#include <QResizeEvent>
 #include <QSignalBlocker>
 #include <QScrollArea>
 #include <QSpinBox>
@@ -39,6 +41,31 @@
 #include <functional>
 
 namespace {
+class AccountSummary final : public QLabel {
+public:
+    explicit AccountSummary(QWidget *parent = nullptr) : QLabel(parent) {
+        setTextFormat(Qt::PlainText);
+        setWordWrap(false);
+        setFixedHeight(24);
+        setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Fixed);
+    }
+    void setFullText(const QString &value) {
+        fullText_ = value;
+        setToolTip(value);
+        updateElision();
+    }
+protected:
+    void resizeEvent(QResizeEvent *event) override {
+        QLabel::resizeEvent(event);
+        updateElision();
+    }
+private:
+    QString fullText_;
+    void updateElision() {
+        setText(fontMetrics().elidedText(fullText_, Qt::ElideMiddle, qMax(0, contentsRect().width())));
+    }
+};
+
 QString trText(const char *text) { return QString::fromUtf8(text); }
 QPushButton *button(const QString &text, QWidget *parent = nullptr, bool primary = false) {
     auto *value = new QPushButton(text, parent);
@@ -87,12 +114,12 @@ MainWindow::MainWindow(const QString &origin) : api(origin) {
     bar->setObjectName("appBar");
     auto *header = new QHBoxLayout(bar);
     header->setContentsMargins(12, 10, 4, 10);
-    header->setSpacing(12);
+    header->setSpacing(8);
     auto *brandIcon = new QLabel;
     brandIcon->setPixmap(Design::icon("calendar", QColor("#1a73e8")).pixmap(32, 32));
     header->addWidget(brandIcon);
     auto *brandText = label(trText("顺手排"), "brand");
-    brandText->setMinimumWidth(205);
+    brandText->setMinimumWidth(180);
     header->addWidget(brandText);
     auto *todayButton = button(trText("今天"));
     todayButton->setToolTip(trText("回到今天"));
@@ -107,6 +134,10 @@ MainWindow::MainWindow(const QString &origin) : api(origin) {
     header->addWidget(dateHeading);
     header->addStretch();
     modeLabel = label(trText("规则体验"), "modeChip");
+    modeLabel->setWordWrap(false);
+    modeLabel->setMinimumWidth(76);
+    modeLabel->setFixedHeight(40);
+    modeLabel->setSizePolicy(QSizePolicy::Minimum, QSizePolicy::Fixed);
     header->addWidget(modeLabel);
     modelButton = button(trText("模型"));
     modelButton->setObjectName("textButton"); modelButton->setIcon(Design::icon("sparkle", QColor("#0b57d0")));
@@ -147,7 +178,10 @@ MainWindow::MainWindow(const QString &origin) : api(origin) {
     auto *reminder = new QCheckBox(trText("前台开始提醒"));
     side->addWidget(reminder);
     side->addWidget(label(trText("开始前 5 分钟提醒，应用保持打开时生效。"), "fieldHint"));
-    accountLabel = label(trText("登录后与手机同步"), "muted");
+    auto *accountSummary = new AccountSummary;
+    accountSummary->setObjectName("muted");
+    accountSummary->setFullText(trText("登录后与手机同步"));
+    accountLabel = accountSummary;
     accountLabel->setMaximumWidth(270);
     side->addWidget(accountLabel);
     auto *sidebarScroll = new QScrollArea;
@@ -259,7 +293,7 @@ void MainWindow::setSession(const QJsonObject &data) {
     const auto previousOwner = owner();
     const bool changed = owner() != data.value("user").toObject().value("id").toString();
     session = data;
-    accountLabel->setText(owner().isEmpty() ? trText("登录后与手机同步") : data.value("user").toObject().value("email").toString());
+    static_cast<AccountSummary *>(accountLabel)->setFullText(owner().isEmpty() ? trText("登录后与手机同步") : data.value("user").toObject().value("email").toString());
     accountButton->setText(owner().isEmpty() ? trText("登录 / 注册") : trText("退出账号"));
     modelButton->setEnabled(!owner().isEmpty());
     phoneButton->setEnabled(!owner().isEmpty());
