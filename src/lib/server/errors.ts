@@ -7,6 +7,7 @@ export class AppError extends Error {
 
 export function databaseError(error: { message: string; code?: string }): never {
   const known: [string, string, number][] = [
+    ["ACCOUNT_MISMATCH", "登录账号已改变，手机日程已保留，请切回原账号后同步。", 409],
     ["VERSION_CONFLICT", "这条日程已在另一端更新，请刷新后重新确认。", 409],
     ["SCHEDULE_CONFLICT", "时间已被其他日程占用，请调整时间后重试。", 409],
     ["TIME_CONFLICT", "时间已被其他日程占用，请调整时间后重试。", 409],

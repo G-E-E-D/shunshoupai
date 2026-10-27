@@ -1,4 +1,5 @@
 #pragma once
+#include "session_cookies.h"
 #include <QEventLoop>
 #include <QJsonDocument>
 #include <QJsonObject>
@@ -18,13 +19,18 @@ struct ApiResult {
 class ApiClient {
     QNetworkAccessManager manager;
     bool working = false;
+    bool rememberSession = false;
 public:
     QString origin;
-    explicit ApiClient(QString base) : origin(std::move(base)) {}
+    explicit ApiClient(QString base, bool remember = false) : rememberSession(remember), origin(std::move(base)) { reset(origin); }
     bool busy() const { return working; }
     void reset(const QString &base) {
         origin = base;
-        manager.setCookieJar(new QNetworkCookieJar(&manager));
+        manager.setCookieJar(rememberSession ? new SessionCookieJar(origin, &manager) : new QNetworkCookieJar(&manager));
+    }
+    void forgetSession() {
+        if (auto *jar = dynamic_cast<SessionCookieJar *>(manager.cookieJar())) jar->clear();
+        else manager.setCookieJar(new QNetworkCookieJar(&manager));
     }
     ApiResult call(const QString &method, const QString &path, const QJsonObject &body = {}) {
         if (working) return {{}, QStringLiteral("上一项请求尚未完成，请稍候。"), 0};
@@ -32,7 +38,7 @@ public:
         QNetworkRequest request{QUrl(origin + path)};
         request.setHeader(QNetworkRequest::ContentTypeHeader, "application/json");
         request.setRawHeader("Origin", origin.toUtf8());
-        request.setRawHeader("User-Agent", "ShunshoupaiQt/1.3.0");
+        request.setRawHeader("User-Agent", "ShunshoupaiQt/" SHUNSHOUPAI_VERSION);
         request.setAttribute(QNetworkRequest::RedirectPolicyAttribute, QNetworkRequest::ManualRedirectPolicy);
         request.setTransferTimeout(35000);
         auto *reply = manager.sendCustomRequest(request, method.toUtf8(), method == "GET" ? QByteArray{} : QJsonDocument(body).toJson(QJsonDocument::Compact));

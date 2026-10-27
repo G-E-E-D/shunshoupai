@@ -1,5 +1,6 @@
 #include "window.h"
 #include "modern_calendar.h"
+#include "draft_state.h"
 
 #include <QAbstractButton>
 #include <QApplication>
@@ -192,6 +193,158 @@ int MainWindow::visualSmoke(const QString &directory) {
         controller.stop();
         return visited && !failed;
     };
+    // Review edits, including an editor that still has focus at close, must
+    // survive without being mistaken for an already-submitted request.
+    const auto reviewKey = DraftState::key("review", api.origin, owner());
+    const auto pendingKey = DraftState::key("pending", api.origin, owner());
+    const auto editorPrefix = DraftState::key("editor", api.origin, owner()) + "/";
+    const QJsonObject reviewRow{{"title", QString::fromUtf8("尚未提交")},
+        {"start_local", "2030-10-28T09:00:00"}, {"end_local", "2030-10-28T10:00:00"},
+        {"timezone", "Asia/Shanghai"}, {"time_source", "explicit"}, {"assumptions", QJsonArray{}}};
+    if (!inspectDialog("draftsDialog", "review-edited.png", [this, reviewRow] { drafts({reviewRow, reviewRow}); }, [](QDialog *dialog) {
+        auto *table = dialog->findChild<QTableWidget *>("draftTable");
+        auto *remove = control(dialog, "draftRemove");
+        if (!table || !remove || table->rowCount() != 2) return false;
+        table->setCurrentCell(1, 0); remove->click();
+        table->setCurrentCell(0, 1); table->editItem(table->item(0, 1));
+        auto *date = table->findChild<QDateTimeEdit *>();
+        if (!date) return false;
+        date->setDateTime(QDateTime::fromString("2030-10-28T09:15:00", Qt::ISODate));
+        table->setCurrentCell(0, 0); table->editItem(table->item(0, 0));
+        auto *title = qobject_cast<QLineEdit *>(QApplication::focusWidget());
+        if (!title) return false;
+        title->setText(QString::fromUtf8("已经手工调整的草稿"));
+        return table->rowCount() == 1 && table->item(0, 0)->text() == title->text();
+    })) return fail(53, "review edits did not survive active editor changes");
+    const auto rememberedReview = DraftState::read(settings, reviewKey).value("events").toArray();
+    if (rememberedReview.size() != 1 || rememberedReview.at(0).toObject().value("title") != QString::fromUtf8("已经手工调整的草稿")
+        || rememberedReview.at(0).toObject().value("start_local") != "2030-10-28T09:15:00"
+        || settings.contains(pendingKey) || events.size() != 1)
+        return fail(54, "closing review lost edits or incorrectly submitted them");
+    if (!inspectDialog("draftsDialog", "review-restored.png", [this] { restorePending(); }, [](QDialog *dialog) {
+        auto *table = dialog->findChild<QTableWidget *>("draftTable");
+        return table && table->rowCount() == 1 && table->editTriggers() != QAbstractItemView::NoEditTriggers
+            && table->item(0, 0)->text() == QString::fromUtf8("已经手工调整的草稿")
+            && control(dialog, "draftSave")->text() == QString::fromUtf8("确认保存");
+    })) return fail(55, "unsubmitted review was not restored as editable content");
+    // A pending result always wins and retains its exact original payload.
+    const QJsonObject pendingFixture{{"request_id", QUuid::createUuid().toString(QUuid::WithoutBraces)}, {"events", QJsonArray{reviewRow}}};
+    DraftState::write(settings, pendingKey, pendingFixture);
+    if (!inspectDialog("draftsDialog", "pending-restored.png", [this] { restorePending(); }, [](QDialog *dialog) {
+        auto *table = dialog->findChild<QTableWidget *>("draftTable");
+        return table && table->editTriggers() == QAbstractItemView::NoEditTriggers
+            && table->item(0, 0)->text() == QString::fromUtf8("尚未提交")
+            && !control(dialog, "draftRemove")->isEnabled();
+    })) return fail(56, "pending recovery lost immutability or original content");
+    if (DraftState::read(settings, pendingKey) != pendingFixture || events.size() != 1)
+        return fail(57, "merely restoring a pending result altered or submitted it");
+    settings.remove(reviewKey); settings.remove(pendingKey); settings.sync();
+    if (!inspectDialog("eventDialog", "manual-draft.png", [this] { editEvent(); }, [](QDialog *dialog) {
+        auto *title = dialog->findChild<QLineEdit *>("eventTitle");
+        auto *start = dialog->findChild<QDateTimeEdit *>("eventStart");
+        auto *end = dialog->findChild<QDateTimeEdit *>("eventEnd");
+        if (!title || !start || !end) return false;
+        title->setText(QString::fromUtf8("手动输入尚未提交"));
+        start->setDateTime(QDateTime::fromString("2030-10-29T11:00:00", Qt::ISODate));
+        end->setDateTime(QDateTime::fromString("2030-10-29T12:00:00", Qt::ISODate));
+        return true;
+    })) return fail(58, "manual new-event draft could not be edited");
+    if (!inspectDialog("eventDialog", "manual-draft-restored.png", [this] { restorePending(); }, [](QDialog *dialog) {
+        auto *title = dialog->findChild<QLineEdit *>("eventTitle");
+        auto *start = dialog->findChild<QDateTimeEdit *>("eventStart");
+        return title && start && title->text() == QString::fromUtf8("手动输入尚未提交")
+            && start->dateTime().toString("yyyy-MM-ddTHH:mm:ss") == "2030-10-29T11:00:00";
+    })) return fail(59, "manual editor contents did not restore after close");
+    if (events.size() != 1 || settings.contains(pendingKey)) return fail(60, "manual draft was unexpectedly submitted");
+    settings.remove(editorPrefix + "new"); settings.sync();
+    const auto originalEvent = events.first().toObject();
+    if (!inspectDialog("eventDialog", "edit-draft.png", [this, originalEvent] { editEvent(originalEvent); }, [](QDialog *dialog) {
+        auto *title = dialog->findChild<QLineEdit *>("eventTitle");
+        if (!title) return false;
+        title->setText(QString::fromUtf8("现有日程的未保存修改"));
+        return true;
+    })) return fail(61, "existing event draft could not be edited");
+    const auto rememberedEditor = DraftState::read(settings, editorPrefix + originalEvent.value("id").toString());
+    if (rememberedEditor.value("event").toObject() != originalEvent || rememberedEditor.value("title") != QString::fromUtf8("现有日程的未保存修改"))
+        return fail(62, "existing editor did not retain the original version alongside edits");
+    auto newerEvent = originalEvent;
+    newerEvent.insert("version", originalEvent.value("version").toInt() + 1);
+    newerEvent.insert("title", QString::fromUtf8("模拟另一台设备的修改"));
+    if (!inspectDialog("eventDialog", "edit-draft-restored.png", [this, newerEvent] { editEvent(newerEvent); }, [](QDialog *dialog) {
+        auto *title = dialog->findChild<QLineEdit *>("eventTitle");
+        return title && title->text() == QString::fromUtf8("现有日程的未保存修改");
+    }) || DraftState::read(settings, editorPrefix + originalEvent.value("id").toString()).value("event").toObject() != originalEvent)
+        return fail(63, "reopening a draft silently adopted a different base version");
+    settings.remove(editorPrefix + originalEvent.value("id").toString()); settings.sync();
+    // Real stale writes must offer an explicit resolution, not trap a retained
+    // draft on its old version forever. These fixtures live on another day.
+    const QJsonObject conflictDraft{{"title", QString::fromUtf8("冲突测试原始日程")},
+        {"start_local", "2030-10-30T09:00:00"}, {"end_local", "2030-10-30T10:00:00"},
+        {"timezone", "Asia/Shanghai"}, {"time_source", "explicit"}, {"assumptions", QJsonArray{}}};
+    auto conflictCreated = api.call("POST", "/api/events/commit", {{"request_id", QUuid::createUuid().toString(QUuid::WithoutBraces)}, {"events", QJsonArray{conflictDraft}}});
+    if (!conflictCreated.ok()) return fail(64, "conflict fixture creation failed");
+    auto conflictOriginal = conflictCreated.data.value("events").toArray().first().toObject();
+    const auto conflictPath = "/api/events/" + conflictOriginal.value("id").toString();
+    auto remoteChanged = api.call("PATCH", conflictPath, {{"base_version", conflictOriginal.value("version")}, {"title", QString::fromUtf8("另一端已经修改")}});
+    if (!remoteChanged.ok()) return fail(65, "remote conflict fixture update failed");
+    auto exerciseResolution = [&](const QJsonObject &original, const QString &mine, const QString &dialogName,
+                                  const QString &choice, bool clone, const QString &screenshotName) {
+        bool failed = false;
+        int phase = 0;
+        QTimer controller;
+        controller.setInterval(60);
+        QElapsedTimer deadline;
+        deadline.start();
+        connect(&controller, &QTimer::timeout, this, [&] {
+            if (api.busy()) return;
+            if (deadline.elapsed() > 20000) { failed = true; dismissUnexpected(); return; }
+            auto *dialog = qobject_cast<QDialog *>(QApplication::activeModalWidget());
+            if (!dialog) return;
+            if (phase == 0 && dialog->objectName() == "eventDialog") {
+                auto *title = dialog->findChild<QLineEdit *>("eventTitle");
+                if (!title || !control(dialog, "eventSave")) { failed = true; queueReject(dialog); return; }
+                title->setText(mine);
+                phase = 1; queueClick(control(dialog, "eventSave"));
+            } else if (phase == 1 && dialog->objectName() == dialogName) {
+                bool localVisible = false;
+                for (auto *label : dialog->findChildren<QLabel *>()) if (label->text() == mine) localVisible = true;
+                if (!localVisible || !control(dialog, choice) || !capture(dialog, screenshotName)) { failed = true; queueReject(dialog); return; }
+                phase = 2; queueClick(control(dialog, choice));
+            } else if (clone && phase == 2 && dialog->objectName() == "draftsDialog") {
+                auto *table = dialog->findChild<QTableWidget *>("draftTable");
+                if (!table || table->rowCount() != 1 || table->item(0, 0)->text() != mine || !control(dialog, "draftSave")) { failed = true; queueReject(dialog); return; }
+                phase = 3; queueClick(control(dialog, "draftSave"));
+            }
+        });
+        controller.start();
+        editEvent(original);
+        controller.stop();
+        return !failed && phase == (clone ? 3 : 2);
+    };
+    if (!exerciseResolution(conflictOriginal, QString::fromUtf8("明确选择保留本机修改"), "eventConflictDialog", "eventKeepMine", false, "conflict-keep-mine.png"))
+        return fail(66, "stale edit could not explicitly save against reviewed latest version");
+    auto resolved = api.call("GET", conflictPath);
+    if (!resolved.ok() || resolved.data.value("event").toObject().value("title") != QString::fromUtf8("明确选择保留本机修改")
+        || resolved.data.value("event").toObject().value("version").toInt() != 3)
+        return fail(67, "explicit keep-mine conflict resolution did not save once");
+    conflictOriginal = resolved.data.value("event").toObject();
+    remoteChanged = api.call("PATCH", conflictPath, {{"base_version", conflictOriginal.value("version")}, {"title", QString::fromUtf8("明确采用另一端日程")}});
+    if (!remoteChanged.ok() || !exerciseResolution(conflictOriginal, QString::fromUtf8("不应覆盖另一端的修改"), "eventConflictDialog", "eventUseRemote", false, "conflict-use-remote.png"))
+        return fail(68, "use-remote conflict resolution failed");
+    resolved = api.call("GET", conflictPath);
+    if (!resolved.ok() || resolved.data.value("event").toObject().value("title") != QString::fromUtf8("明确采用另一端日程")
+        || resolved.data.value("event").toObject().value("version").toInt() != 4
+        || settings.contains(editorPrefix + conflictOriginal.value("id").toString()))
+        return fail(69, "use-remote choice unexpectedly wrote or retained conflicting draft");
+    conflictOriginal = resolved.data.value("event").toObject();
+    const auto removedRemote = api.call("DELETE", conflictPath, {{"base_version", conflictOriginal.value("version")}});
+    if (!removedRemote.ok() || !exerciseResolution(conflictOriginal, QString::fromUtf8("另存恢复的本机日程"), "eventDeletedDialog", "eventKeepMine", true, "conflict-deleted.png"))
+        return fail(70, "remote deletion could not preserve local edits as a new event");
+    const auto cloned = api.call("GET", "/api/events?from=2030-10-30T00:00:00%2B08:00&to=2030-10-31T00:00:00%2B08:00");
+    const auto clonedRows = cloned.data.value("events").toArray();
+    if (!cloned.ok() || clonedRows.size() != 1 || clonedRows.first().toObject().value("title") != QString::fromUtf8("另存恢复的本机日程")
+        || clonedRows.first().toObject().value("id") == conflictOriginal.value("id"))
+        return fail(71, "deleted event recovery did not create exactly one new event");
     if (!inspectDialog("modelDialog", "model-settings.png", [this] { models(); }, [](QDialog *dialog) {
         return dialog->findChild<QLineEdit *>("modelBaseUrl") && dialog->findChild<QLineEdit *>("modelApiKey");
     })) return fail(33, "native model settings dialog failed");
@@ -239,6 +392,12 @@ int MainWindow::visualSmoke(const QString &directory) {
     if (!populated.ok()) return fail(42, "documentation fixture events failed to save");
     refresh();
     if (events.size() != 3) return fail(43, "saved native/API fixtures were not visible in the real calendar query");
+    QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+    QPointer<QLabel> stableTitle = findChild<QLabel *>("eventTitle");
+    if (!stableTitle) return fail(51, "event control missing before unchanged refresh");
+    refresh();
+    QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+    if (!stableTitle) return fail(52, "unchanged background refresh replaced existing controls");
     composer->setPlainText(QString::fromUtf8("明天下午三点到四点讨论产品方案，晚上七点读书一小时。"));
     if (!capture(this, "main-desktop.png")) return fail(44, "native main window screenshot failed");
     resize(1060, 720);
@@ -260,5 +419,8 @@ int MainWindow::visualSmoke(const QString &directory) {
         return fail(50, "compact account summary must fit and retain the full email in its tooltip");
     std::cout << "PASS: 1060px header actions and single-line provider badge fit; account summary elides with full tooltip\n";
     std::cout << "PASS: actual native login/register; event editor -> editable drafts -> saved event; model/phone/service dialogs; calendar mouse and keyboard; rendered main calendar\n";
+    std::cout << "PASS: unchanged background refresh preserves native controls and focus\n";
+    std::cout << "PASS: edited review rows/removals, active cell editor, pending immutability, manual new/existing drafts persist without auto-submit\n";
+    std::cout << "PASS: explicit keep-local/use-remote conflict resolution and remote-deletion recovery as one new event\n";
     return 0;
 }

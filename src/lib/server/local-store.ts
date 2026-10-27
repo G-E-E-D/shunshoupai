@@ -5,6 +5,9 @@ import { DatabaseSync } from "node:sqlite";
 import type { EventDraft, ScheduleEvent } from "../types";
 import { localToIso, isoToLocal } from "../time";
 import { AppError } from "./errors";
+import { syncRequestSchema, type SyncMutation, type SyncRequest, type SyncResponse, type SyncResult } from "../sync";
+
+export const LOCAL_SESSION_MAX_AGE = 30 * 24 * 60 * 60;
 
 type User = { id: string; email: string };
 type EventRow = ScheduleEvent & { user_id: string };
@@ -64,6 +67,11 @@ export class LocalStore {
         user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
         request_id TEXT NOT NULL, payload_hash TEXT NOT NULL, result TEXT NOT NULL,
         created_at TEXT NOT NULL, PRIMARY KEY(user_id, request_id)
+      );
+      CREATE TABLE IF NOT EXISTS sync_mutations (
+        user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        mutation_id TEXT NOT NULL, payload_hash TEXT NOT NULL, result TEXT NOT NULL,
+        PRIMARY KEY(user_id, mutation_id)
       );
       CREATE TABLE IF NOT EXISTS ai_usage (
         user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
@@ -127,21 +135,34 @@ export class LocalStore {
     return { id: row.id, email: row.email };
   }
 
-  createSession(userId: string): string {
+  createSession(userId: string, now = Date.now()): string {
     const token = randomBytes(32).toString("base64url");
     this.transaction(() => {
-      this.db.prepare("DELETE FROM sessions WHERE expires_at <= ?").run(Date.now());
+      this.db.prepare("DELETE FROM sessions WHERE expires_at <= ?").run(now);
       this.db.prepare("INSERT INTO sessions(token_hash,user_id,expires_at) VALUES (?,?,?)")
-        .run(hash(token), userId, Date.now() + 7 * 24 * 60 * 60 * 1000);
+        .run(hash(token), userId, now + LOCAL_SESSION_MAX_AGE * 1000);
     });
     return token;
   }
 
-  sessionUser(token: string | undefined): User | null {
+  sessionUser(token: string | undefined, now = Date.now()): User | null {
     if (!token || token.length > 128) return null;
     const row = this.db.prepare(`SELECT u.id,u.email FROM users u JOIN sessions s ON s.user_id=u.id
-      WHERE s.token_hash=? AND s.expires_at>?`).get(hash(token), Date.now()) as User | undefined;
+      WHERE s.token_hash=? AND s.expires_at>?`).get(hash(token), now) as User | undefined;
     return row ? { id: row.id, email: row.email } : null;
+  }
+
+  // Renew at most once a day, avoiding database/cookie writes on every poll.
+  // An expired or explicitly revoked credential can never be renewed.
+  refreshSession(token: string | undefined, now = Date.now()) {
+    if (!token || token.length > 128) return null;
+    const row = this.db.prepare(`SELECT u.id,u.email,s.expires_at FROM users u JOIN sessions s ON s.user_id=u.id
+      WHERE s.token_hash=? AND s.expires_at>?`).get(hash(token), now) as (User & { expires_at: number }) | undefined;
+    if (!row) return null;
+    const renewed = row.expires_at <= now + (LOCAL_SESSION_MAX_AGE - 86400) * 1000;
+    const expires = renewed ? now + LOCAL_SESSION_MAX_AGE * 1000 : row.expires_at;
+    if (renewed) this.db.prepare("UPDATE sessions SET expires_at=? WHERE token_hash=? AND expires_at>?").run(expires, hash(token), now);
+    return { user: { id: row.id, email: row.email }, expires_at: new Date(expires).toISOString(), renewed };
   }
 
   deleteSession(token: string | undefined) {
@@ -153,6 +174,12 @@ export class LocalStore {
       AND start_at<? AND end_at>? ORDER BY start_at,id LIMIT 501`).all(userId, to, from) as unknown as EventRow[];
     if (rows.length > 500) throw new AppError("TOO_MANY_EVENTS", "这个时间范围内日程过多，请缩小查询范围。", 400);
     return rows.map(publicEvent);
+  }
+
+  event(userId: string, id: string): ScheduleEvent {
+    const row = this.db.prepare("SELECT * FROM events WHERE user_id=? AND id=?").get(userId, id) as EventRow | undefined;
+    if (!row) throw new AppError("NOT_FOUND", "日程不存在或已删除。", 404);
+    return publicEvent(row);
   }
 
   private assertAvailable(userId: string, start: string, end: string, excludeId = "") {
@@ -208,7 +235,7 @@ export class LocalStore {
       // Retain explicit local conversion checks on merged start/end as well.
       isoToLocal(start);
       const status = patch.status ?? row.status;
-      if (!deleting && status === "planned") this.assertAvailable(userId, start, end, id);
+      if (!deleting && status === "planned" && (row.status !== "planned" || start !== row.start_at || end !== row.end_at)) this.assertAvailable(userId, start, end, id);
       const now = new Date().toISOString();
       this.db.prepare(`UPDATE events SET title=?,start_at=?,end_at=?,status=?,version=version+1,updated_at=?,deleted_at=?
         WHERE user_id=? AND id=? AND version=?`).run(patch.title ?? row.title, start, end, status, now, deleting ? now : null, userId, id, baseVersion);
@@ -226,6 +253,61 @@ export class LocalStore {
         ON CONFLICT(user_id,usage_day) DO UPDATE SET count=count+1`).run(userId, day);
       return true;
     });
+  }
+
+  sync(userId: string, input: SyncRequest): SyncResponse {
+    const request = syncRequestSchema.parse(input);
+    if (request.account_id !== userId) throw new AppError("ACCOUNT_MISMATCH", "登录账号已改变，手机日程已保留，请切回原账号后同步。", 409);
+    return this.transaction(() => {
+      const results = request.mutations.map((mutation) => this.syncMutation(userId, mutation));
+      // Include tombstones: absence from a page never means an event was deleted.
+      const rows = this.db.prepare("SELECT * FROM events WHERE user_id=? AND id>? ORDER BY id LIMIT 201")
+        .all(userId, request.after ?? "") as unknown as EventRow[];
+      const events = rows.slice(0, 200).map(publicEvent);
+      return { results, events, has_more: rows.length > 200, next_cursor: rows.length > 200 ? events.at(-1)!.id : null };
+    });
+  }
+
+  private syncMutation(userId: string, mutation: SyncMutation): SyncResult {
+    const payloadHash = hash(JSON.stringify(mutation));
+    const previous = this.db.prepare("SELECT payload_hash,result FROM sync_mutations WHERE user_id=? AND mutation_id=?")
+      .get(userId, mutation.mutation_id) as { payload_hash: string; result: string } | undefined;
+    if (previous) {
+      if (previous.payload_hash !== payloadHash) throw new AppError("IDEMPOTENCY_CONFLICT", "同步内容已改变，请保留原请求核实保存结果。", 409);
+      return JSON.parse(previous.result);
+    }
+    const row = this.db.prepare("SELECT * FROM events WHERE user_id=? AND id=?").get(userId, mutation.id) as EventRow | undefined;
+    let result: SyncResult;
+    try {
+      if (mutation.base_version === 0) {
+        // Globally unique IDs may never take over another account's row.
+        if (this.db.prepare("SELECT id FROM events WHERE id=?").get(mutation.id)) throw new AppError("ID_CONFLICT", "这条日程编号已存在，手机内容已保留，请另存为新日程。", 409);
+      } else {
+        if (!row) throw new AppError("NOT_FOUND", "这条日程已不存在，手机内容已保留。", 409);
+        if (row.version !== mutation.base_version || row.deleted_at) throw new AppError("VERSION_CONFLICT", "两台设备都修改了这条日程，手机内容已保留，请选择要使用的版本。", 409);
+      }
+      const start = mutation.event ? localToIso(mutation.event.start_local) : row!.start_at;
+      const end = mutation.event ? localToIso(mutation.event.end_local) : row!.end_at;
+      const status = mutation.event?.status ?? row!.status;
+      // Independent offline appointments are real commitments: retain both
+      // even when their times overlap. Clients show overlap without data loss.
+      const now = new Date().toISOString();
+      if (mutation.base_version === 0) {
+        this.db.prepare(`INSERT INTO events(id,user_id,title,start_at,end_at,timezone,status,version,created_at,updated_at)
+          VALUES(?,?,?,?,?,'Asia/Shanghai',?,1,?,?)`).run(mutation.id, userId, mutation.event!.title, start, end, status, now, now);
+      } else {
+        this.db.prepare(`UPDATE events SET title=?,start_at=?,end_at=?,status=?,version=version+1,updated_at=?,deleted_at=?
+          WHERE user_id=? AND id=?`).run(mutation.event?.title ?? row!.title, start, end, status, now, mutation.deleted ? now : null, userId, mutation.id);
+      }
+      const updated = this.db.prepare("SELECT * FROM events WHERE user_id=? AND id=?").get(userId, mutation.id) as unknown as EventRow;
+      result = { mutation_id: mutation.mutation_id, status: "applied", event: publicEvent(updated) };
+    } catch (error) {
+      if (!(error instanceof AppError)) throw error;
+      result = { mutation_id: mutation.mutation_id, status: "conflict", code: error.code, message: error.message, ...(row ? { event: publicEvent(row) } : {}) };
+    }
+    this.db.prepare("INSERT INTO sync_mutations(user_id,mutation_id,payload_hash,result) VALUES(?,?,?,?)")
+      .run(userId, mutation.mutation_id, payloadHash, JSON.stringify(result));
+    return result;
   }
 
   modelSetting(userId: string): ModelSettingRecord | null {
@@ -294,7 +376,7 @@ export class LocalStore {
       }
       this.db.prepare("UPDATE pairing_requests SET consumed_at=? WHERE token_hash=? AND consumed_at IS NULL").run(now, hash(token));
       const sessionToken = randomBytes(32).toString("base64url");
-      const sessionExpires = now + 7 * 24 * 60 * 60 * 1000;
+      const sessionExpires = now + LOCAL_SESSION_MAX_AGE * 1000;
       this.db.prepare("INSERT INTO sessions(token_hash,user_id,expires_at) VALUES(?,?,?)").run(hash(sessionToken), pairing.user_id, sessionExpires);
       return { user: { id: pairing.user_id, email: pairing.email }, session_token: sessionToken, session_expires_at: new Date(sessionExpires).toISOString() };
     });

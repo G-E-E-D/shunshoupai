@@ -3,7 +3,7 @@ import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 import { cookies } from "next/headers";
 import type { SessionInfo } from "../types";
 import { AppError } from "./errors";
-import { localStore } from "./local-store";
+import { LOCAL_SESSION_MAX_AGE, localStore } from "./local-store";
 import { clearPairedSupabaseSession, pairedSupabaseCredential } from "./paired-session";
 
 export const SESSION_COOKIE = "shunshoupai_session";
@@ -92,8 +92,10 @@ export async function currentSession(): Promise<{ info: SessionInfo; supabase?: 
     };
   }
   const jar = await cookies();
-  const user = localStore().sessionUser(jar.get(SESSION_COOKIE)?.value);
-  return { info: { user, mode, ai_provider: aiProvider() } };
+  const token = jar.get(SESSION_COOKIE)?.value;
+  const session = localStore().refreshSession(token);
+  if (session?.renewed) await setLocalSessionToken(token!, session.expires_at);
+  return { info: { user: session?.user ?? null, mode, ai_provider: aiProvider(), session_expires_at: session?.expires_at ?? null } };
 }
 
 export async function requireAuth(): Promise<AuthContext> {
@@ -111,7 +113,7 @@ export async function setLocalSessionToken(token: string, expiresAt?: string) {
   const jar = await cookies();
   jar.set(SESSION_COOKIE, token, {
     httpOnly: true, sameSite: "lax", secure: process.env.COOKIE_SECURE === "true",
-    path: "/", maxAge: expiresAt ? Math.max(1, Math.floor((Date.parse(expiresAt) - Date.now()) / 1000)) : 7 * 24 * 60 * 60,
+    path: "/", maxAge: expiresAt ? Math.max(1, Math.floor((Date.parse(expiresAt) - Date.now()) / 1000)) : LOCAL_SESSION_MAX_AGE,
   });
 }
 

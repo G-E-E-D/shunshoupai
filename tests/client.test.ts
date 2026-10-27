@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { requestId, touchesWindow } from "../src/lib/client";
+import { moveEventStart, requestId, touchesWindow } from "../src/lib/client";
 import { commitSchema } from "../src/lib/schemas";
 import type { EventDraft, ScheduleEvent } from "../src/lib/types";
 
@@ -94,4 +94,15 @@ test("overnight visibility works across year changes independently of host timez
   assert.equal(touchesWindow(yearBoundary, "2026-12-31"), true);
   assert.equal(touchesWindow(yearBoundary, "2027-01-01"), true);
   assert.equal(touchesWindow(yearBoundary, "2027-01-02"), false);
+});
+
+test("moving an event preserves its duration across dates and year boundaries", () => {
+  assert.equal(moveEventStart("2026-10-27T09:00", "2026-10-27T10:30", "2026-12-31T23:30"), "2027-01-01T01:00");
+  assert.equal(moveEventStart("2026-10-27T23:00", "2026-10-28T01:00", "2026-10-29T10:00"), "2026-10-29T12:00");
+});
+
+test("an incomplete or invalid time edit does not erase the chosen end time", () => {
+  assert.equal(moveEventStart("2026-10-27T09:00", "2026-10-27T10:30", ""), "2026-10-27T10:30");
+  assert.equal(moveEventStart("", "2026-10-27T10:30", "2026-10-28T09:00"), "2026-10-27T10:30");
+  assert.equal(moveEventStart("2026-10-27T11:00", "2026-10-27T10:30", "2026-10-28T09:00"), "2026-10-27T10:30");
 });

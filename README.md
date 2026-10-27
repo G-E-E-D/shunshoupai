@@ -1,42 +1,44 @@
 # 顺手排 · 把想法排进生活
 
-电脑端是 **C++ / Qt Widgets 原生应用**，不使用浏览器或 WebView 作为桌面界面。安卓端恢复纯 Java 工程，已移除 NDK / JNI；保留扫码自动登录、模型设置和应用内 WebView 日程界面。两个客户端访问同一服务，使用同一账号和固定的日程提示词。
+电脑端是 **C++ / Qt Widgets 原生应用**。安卓端使用纯 Java 原生日程首页，本机保存日程，无需连接电脑即可新增、修改、完成和删除；连接电脑后自动合并日程，WebView 保留智能整理和账号设置入口。两个客户端连接后使用同一账号和固定的日程提示词。
 
-[Windows 一键安装 EXE](https://github.com/G-E-E-D/shunshoupai/releases/download/v1.3.0/shunshoupai-desktop-v1.3.0-setup.exe) · [Android APK](https://github.com/G-E-E-D/shunshoupai/releases/download/v1.3.0/shunshoupai-android-v1.3.0.apk) · [发布页](https://github.com/G-E-E-D/shunshoupai/releases/tag/v1.3.0)
+v1.4.0 包含保持登录、手机离线日程、恢复连接后自动合并、三端草稿恢复和更稳定的刷新。实现与验证范围见 [易用性改进](docs/usability.md)。
 
-![Qt 原生桌面实际渲染](https://github.com/G-E-E-D/shunshoupai/releases/download/v1.3.0/native-desktop.png)
+[Windows 一键安装 EXE](https://github.com/G-E-E-D/shunshoupai/releases/download/v1.4.0/shunshoupai-desktop-v1.4.0-setup.exe) · [Android APK](https://github.com/G-E-E-D/shunshoupai/releases/download/v1.4.0/shunshoupai-android-v1.4.0.apk) · [发布页](https://github.com/G-E-E-D/shunshoupai/releases/tag/v1.4.0)
+
+![Qt 原生桌面实际渲染](https://github.com/G-E-E-D/shunshoupai/releases/download/v1.4.0/native-desktop.png)
 
 ## 安装后使用
 
-v1.3.0 采用参考 Google 日历的蓝白界面，重做登录/设置弹窗与原生圆形日期选择器。安卓回到纯 Java 实现，修复空页面被误判成功的路径：显示原生加载状态，等待可交互内容和可绘制帧；失败时可重试或切换兼容渲染。建议两端一起更新；新版安卓也能在旧服务没有 `/mobile` 时回退根入口。
+手机安装后可直接使用“本机日程”，不必先完成下面的连接步骤。需要与电脑合并或使用智能整理时，再关联一次电脑账号。建议两端一起更新；旧服务没有同步接口时，本机内容仍保留。
 
 1. Windows 运行安装器，打开“顺手排”。安装包包含 Qt 运行库、Node.js 和本地服务，应用会自动启动服务，无需另装 Node。
 2. 点击“登录”，注册自己的账号。无预设账号，本地模式不发送验证邮件。
 3. 写下一段安排，点击“整理日程”；检查可编辑草稿，确认后才保存。
 4. “模型设置”中填写自己的 Base URL、模型名称和 API Key，测试连接后保存。日程提示词固定在服务端，用户不需要填写。
-5. 电脑点击“手机登录”，选择局域网地址并生成一次性登录码。安卓首页点击“扫码连接”，即可连接并登录同一账号，无需再次输入密码。
+5. 电脑点击“手机登录”，选择局域网地址并生成一次性登录码。安卓点击“连接电脑”后选择“扫码连接”，即可连接并登录同一账号，无需再次输入密码。
 
-两台设备需能访问同一服务。本地模式中，手机和电脑连接同一 Wi-Fi，允许可信局域网访问端口 **43127**，电脑应用保持运行。扫码登录码有效 **90 秒**、只能使用一次；它是临时登录凭据，请勿截图转发。地址二维码仍可用于仅连接、不登录。
+手机日常使用无需电脑在线。首次关联和同步时，两台设备需能访问同一服务：本地模式连接同一 Wi-Fi，允许可信局域网访问端口 **43127**，电脑应用保持运行。关联后手机前台自动尝试同步，断线期间继续保存到本机。扫码登录码有效 **90 秒**、只能使用一次；它是临时登录凭据，请勿截图转发。地址二维码仍可用于仅连接、不登录。
 
-Windows 数据保存在 `%LOCALAPPDATA%/Shunshoupai/data/`，升级和卸载保留用户数据。退出桌面应用会停止本次启动的本地服务。桌面登录 Cookie 只保存在进程内存，重新启动后需登录；账号与日程保留在数据库中。
+Windows 数据保存在 `%LOCALAPPDATA%/Shunshoupai/data/`，升级和卸载保留用户数据。退出桌面应用会停止本次启动的本地服务。Windows 登录凭据使用当前用户的 DPAPI 加密保存在本机，启动自动恢复；主动退出会清除。默认本地会话 30 天有效，使用时每日续期，短暂断网不清除登录。
 
 ## 功能与边界
 
 | 能力 | 当前行为 |
 | --- | --- |
 | 原生桌面 | C++17 / Qt 6 Widgets、Network；日程整理、草稿确认、日程增删改、完成/恢复、当天/七天、搜索 |
-| 安卓 | 纯 Java 平台界面、相机与连接校验；保留扫码登录和 WebView 工作台，新增可见加载、空页超时恢复与兼容渲染 |
+| 安卓 | 纯 Java 原生日程首页与 SQLite 离线存储；扫码关联、日期时间选择、搜索、冲突处理；智能整理使用在线 WebView |
 | 个人模型 | 每账号保存兼容 Chat Completions 的 Base URL、模型名和 Key；Key 在服务端 AES-256-GCM 加密，仅读回掩码 |
 | 固定提示词 | `src/lib/parser.ts` 固定日程系统提示词，模型设置接口拒绝提示词覆盖 |
 | 扫码登录 | 高熵一次性码、90 秒有效、数据库原子兑换；二维码 fragment 携带，不含密码、长期会话或模型 Key |
-| 跨端同步 | 同服务同账号；前台约 8 秒补拉，手动刷新和安卓回前台时查询 |
+| 跨端同步 | 同服务同账号；手机前台自动重连、上传离线操作并分页拉取含删除记录的日程；重试不重复创建，同条目冲突保留手机修改 |
 | 保存保护 | 草稿确认、批量事务、防重编号、版本冲突和时间重叠检查；不确定结果保留原编号核实 |
 | 无模型体验 | 明确显示规则解析；不调用付费模型，也不把规则结果当 AI |
 | 时间与提醒 | 上海时区单次日程，2000–2100 年、最长 24 小时；提醒仅前台生效 |
 
-未提供 iOS、可靠后台/锁屏提醒、离线合并、循环日程、自动空档排期、外部日历双向同步或已托管公网 Demo。
+未提供 iOS、可靠后台/锁屏提醒、循环日程、自动空档排期、外部日历双向同步或已托管公网 Demo。离线可使用原生日程，智能整理和模型设置仍需连接服务。
 
-默认 SQLite 的手机登录是独立 7 天会话。可选 Supabase 模式的扫码授权只持续至源 access JWT 到期，到期重新扫码或密码登录；不会复制 refresh token。完整说明见 [模型与扫码](docs/model-settings.md)、[桌面安装与构建](docs/desktop.md)、[安卓说明](docs/android.md)、[验收记录](docs/acceptance.md)。
+默认 SQLite 的手机登录是独立 30 天会话，活跃使用自动续期。可选 Supabase 模式的扫码授权只持续至源 access JWT 到期，到期重新扫码或密码登录；不会复制 refresh token。失效期间手机仍可离线使用。完整说明见 [模型与扫码](docs/model-settings.md)、[桌面安装与构建](docs/desktop.md)、[安卓说明](docs/android.md)、[验收记录](docs/acceptance.md)。
 
 ## 从源码运行
 
@@ -77,7 +79,7 @@ Android 使用 JDK 17、Android SDK 36 和仓库内 Gradle Wrapper，不再需�
 | `NEXT_PUBLIC_SUPABASE_URL` / `NEXT_PUBLIC_SUPABASE_ANON_KEY` | 可选 Supabase 地址和公开密钥 |
 | `APP_ORIGIN` / `COOKIE_SECURE` | 公网实际 HTTPS origin / true；本地局域网留空 / false |
 
-新 Supabase 部署按顺序执行全部 [迁移](supabase/migrations/)；已有部署追加个人模型和扫码配对迁移。见 [云端配置](docs/cloud-setup.md)。SQLite 单实例需持久可写磁盘；多实例使用 Supabase 和一致的加密主密钥。
+新 Supabase 部署按顺序执行全部 [迁移](supabase/migrations/)；已有部署追加个人模型、扫码配对和离线同步迁移。见 [云端配置](docs/cloud-setup.md)。SQLite 单实例需持久可写磁盘；多实例使用 Supabase 和一致的加密主密钥。
 
 ## 检查与结构
 

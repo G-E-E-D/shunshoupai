@@ -45,6 +45,7 @@
                 <TextView android:layout_width="match_parent" android:layout_height="wrap_content" android:text="@string/error_title" android:textSize="24sp" android:fontFamily="sans-serif-medium" android:textColor="@color/ink" android:gravity="center" />
                 <TextView android:id="@+id/error_message" android:layout_width="match_parent" android:layout_height="wrap_content" android:text="@string/error_default" android:textSize="14sp" android:lineSpacingExtra="6dp" android:textColor="@color/muted" android:gravity="center" android:layout_marginTop="14dp" android:accessibilityLiveRegion="polite" />
                 <Button android:id="@+id/error_retry" style="@style/ModernActionButton" android:layout_width="match_parent" android:layout_height="wrap_content" android:text="@string/retry" android:layout_marginTop="28dp" />
+                <Button android:id="@+id/error_offline" style="@style/ModernTonalButton" android:layout_width="match_parent" android:layout_height="wrap_content" android:text="@string/back_offline" android:layout_marginTop="8dp" />
                 <Button android:id="@+id/error_settings" android:layout_width="match_parent" android:layout_height="wrap_content" android:minHeight="48dp" android:layout_marginTop="8dp" style="?android:attr/borderlessButtonStyle" android:text="@string/edit_server" android:textAllCaps="false" android:textColor="@color/accent" android:textSize="14sp" />
             </LinearLayout>
         </FrameLayout>

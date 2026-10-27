@@ -7,7 +7,7 @@
 ## 1. 创建 Supabase 项目
 
 1. 创建自己的 Supabase 项目，记录 Project URL 与公开的 anon key / publishable key。
-2. 在 SQL Editor 中按顺序执行 [初始化迁移](../supabase/migrations/20261027000000_initial.sql)、[个人模型设置迁移](../supabase/migrations/20261027010000_model_settings.sql)、[扫码配对迁移](../supabase/migrations/20261027020000_pairing.sql)。已有 v1.1.0 数据库追加后两个；已执行模型迁移的数据库只追加配对迁移，不要重复运行初始化迁移。
+2. 在 SQL Editor 中按顺序执行 [初始化迁移](../supabase/migrations/20261027000000_initial.sql)、[个人模型设置迁移](../supabase/migrations/20261027010000_model_settings.sql)、[扫码配对迁移](../supabase/migrations/20261027020000_pairing.sql)、[离线同步迁移](../supabase/migrations/20261027030000_offline_sync.sql)。已有数据库只追加尚未执行的迁移，不要重复运行初始化迁移。没有同步迁移时，手机仍保留本机日程并提示服务升级。
 3. 在 Authentication → Providers 中启用 Email。默认开启邮箱确认时，注册后必须先点邮件中的确认链接，再回到应用登录。应用不会把“等待确认”显示为已经登录。
 4. 在 Authentication → URL Configuration 中设置实际站点的 Site URL。仅添加自己使用的 HTTPS 域名和开发回调地址；不要使用宽泛的通配地址。
 5. 从 `.env.example` 复制为 `.env.local`，配置：
@@ -29,13 +29,14 @@ MODEL_SETTINGS_ENCRYPTION_KEY=your-private-32-byte-base64-key
 
 ## 2. 表、权限和 RPC
 
-三个迁移共同创建以下对象：
+四个迁移共同创建以下对象：
 
 | 对象 | 作用 |
 | --- | --- |
 | `profiles` | 每个账号的上海时区配置；注册触发器自动建立记录 |
 | `events` | 正式日程、版本号和软删除标记 |
 | `mutation_requests` | 用户与请求标识唯一，记录规范化内容哈希及原始保存结果 |
+| `sync_mutations` 与 `sync_events(p_account_id, p_mutations, p_after)` | 手机离线操作的幂等回执、账号校验、版本冲突和含删除记录的分页合并；独立日程时间重叠时保留双方 |
 | `ai_daily_usage` | 按 UTC 日期计算的每账号解析次数 |
 | `commit_events(p_request_id, p_events)` | 一次确认 1–5 项 `EventDraft`；事务内校验、冲突检查、防重和写入 |
 | `mutate_event(p_id, p_base_version, p_patch, p_delete)` | 版本校验后修改、完成或软删除 |
@@ -88,7 +89,7 @@ npm run start
 
 已登录的 Qt 桌面端可以通过“手机扫码登录”签发一次性二维码。二维码把登录凭证放在 URL fragment 中，数据库只存凭证哈希；约 90 秒失效，兑换后不可重用，重新生成会作废同来源会话的旧码。Android 扫描后连接所选服务并登录同一账号，不应转发二维码。接口也供原生客户端调用：签发需要已登录 Cookie，兑换后由服务设置 HttpOnly Cookie；客户端携带该服务的固定 Origin 和 JSON 请求体。
 
-SQLite 模式兑换后产生独立 7 天手机会话。Supabase 模式不复制 refresh token，而是使用加密 Cookie 转授已验证的来源 access JWT，所有后续查询和 RPC 继续受该账号的 RLS 约束。临时登录截至来源 JWT 到期或来源会话 `not_after` 中较早的时间，前端显示到期时间；到期后需重新扫码或使用密码登录。签发和兑换时都会验证来源 `auth.sessions` 仍存在。它不是会自动续期的独立 Supabase 登录。
+SQLite 模式兑换后产生独立 30 天手机会话，活跃使用每日续期。Supabase 模式不复制 refresh token，而是使用加密 Cookie 转授已验证的来源 access JWT，所有后续查询和 RPC 继续受该账号的 RLS 约束。临时登录截至来源 JWT 到期或来源会话 `not_after` 中较早的时间，前端显示到期时间；到期后需重新扫码或使用密码登录。签发和兑换时都会验证来源 `auth.sessions` 仍存在。它不是会自动续期的独立 Supabase 登录。两种模式登录失效期间均可继续使用手机本机日程，重新登录原账号后再同步。
 
 本地 SQLite 模式只适用于一个 Node.js 服务实例，并要求可写、持久磁盘。把 `APP_DB_PATH` 指向持久卷，备份数据库和对应 WAL 文件时应停机或使用 SQLite 一致性备份工具。不要把 SQLite 放在临时文件系统，也不要让多个独立服务实例各用一份文件宣称已经同步。无持久盘或多实例部署使用 Supabase 模式。
 

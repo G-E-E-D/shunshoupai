@@ -24,7 +24,7 @@ class MainWindow : public QMainWindow {
     QLabel *accountLabel, *modeLabel, *status, *summary;
     QLabel *dateHeading;
     ModernCalendarWidget *miniCalendar;
-    QPushButton *accountButton, *modelButton, *phoneButton;
+    QPushButton *accountButton, *modelButton, *phoneButton, *resumeButton;
     QTextEdit *composer;
     QLineEdit *search;
     QDateEdit *day;
@@ -33,6 +33,7 @@ class MainWindow : public QMainWindow {
     QTimer *poll;
     QSet<QString> reminded;
     bool reminders = false;
+    bool sessionChecked = false;
     QTimeZone zone{"Asia/Shanghai"};
     QDate currentDay;
     QString owner() const;
@@ -48,8 +49,9 @@ class MainWindow : public QMainWindow {
     void auth();
     void refresh();
     void restorePending();
+    void updateRecoveryButton();
 public:
-    explicit MainWindow(const QString &origin);
+    explicit MainWindow(const QString &origin, bool rememberSession = true);
     void initialize();
     int smokeTest(const QString &screenshot);
     int visualSmoke(const QString &directory);

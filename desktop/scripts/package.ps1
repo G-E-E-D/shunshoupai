@@ -17,10 +17,16 @@ $BuildDir = [IO.Path]::GetFullPath($BuildDir)
 $StageDir = [IO.Path]::GetFullPath($StageDir)
 $OutputDir = [IO.Path]::GetFullPath($OutputDir)
 if (Test-Path -LiteralPath $StageDir) { throw "StageDir must be new to prevent stale payload files: $StageDir" }
-New-Item -ItemType Directory -Path $StageDir, $OutputDir -Force | Out-Null
 $app = Join-Path $BuildDir 'Shunshoupai.exe'
 if (!(Test-Path -LiteralPath $app)) { $app = Join-Path $BuildDir 'Release\Shunshoupai.exe' }
 if (!(Test-Path -LiteralPath $app)) { throw 'Build Shunshoupai.exe before packaging.' }
+$appVersion = (Get-Item -LiteralPath $app).VersionInfo.ProductVersion
+if ($appVersion -ne $version) { throw "Native application version $appVersion does not match package.json $version. Rebuild the desktop application." }
+$standalone = Join-Path $repoRoot '.next\standalone'
+if (!(Test-Path -LiteralPath (Join-Path $standalone 'server.js'))) { throw 'Run npm run build with output: standalone first.' }
+$backendVersion = (Get-Content -LiteralPath (Join-Path $standalone 'package.json') -Raw | ConvertFrom-Json).version
+if ($backendVersion -ne $version) { throw "Bundled backend version $backendVersion does not match package.json $version. Run npm run build again." }
+New-Item -ItemType Directory -Path $StageDir, $OutputDir -Force | Out-Null
 Copy-Item -LiteralPath $app -Destination (Join-Path $StageDir 'Shunshoupai.exe')
 & $Windeployqt --release --compiler-runtime --no-translations --no-opengl-sw --no-system-d3d-compiler --dir $StageDir (Join-Path $StageDir 'Shunshoupai.exe')
 if ($LASTEXITCODE -ne 0) { throw 'windeployqt failed.' }
@@ -47,8 +53,6 @@ Copy-Item -LiteralPath (Join-Path $desktopRoot 'THIRD_PARTY_NOTICES.md') -Destin
 Copy-Item -LiteralPath (Join-Path $desktopRoot 'vendor\qrcodegen.hpp') -Destination $licenses.FullName
 Copy-Item -LiteralPath (Join-Path $desktopRoot 'licenses\Qt') -Destination $licenses.FullName -Recurse
 
-$standalone = Join-Path $repoRoot '.next\standalone'
-if (!(Test-Path -LiteralPath (Join-Path $standalone 'server.js'))) { throw 'Run npm run build with output: standalone first.' }
 $backend = Join-Path $StageDir 'resources\backend'
 New-Item -ItemType Directory -Path $backend -Force | Out-Null
 # Robocopy materializes traced Windows junctions rather than shipping build-machine

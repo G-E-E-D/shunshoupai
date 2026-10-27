@@ -69,12 +69,14 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'Next standalone build failed.' }
       - name: Compile native C++ Qt application
         run: |
-          cmake -S desktop -B desktop/build -G 'Visual Studio 17 2022' -A x64
+          cmake -S desktop -B desktop/build -G 'Visual Studio 17 2022' -A x64 -DBUILD_TESTING=ON
           if ($LASTEXITCODE -ne 0) { throw 'CMake configuration failed.' }
           cmake --build desktop/build --config Release --parallel 2
           if ($LASTEXITCODE -ne 0) { throw 'Native compilation failed.' }
-          ctest --test-dir desktop/build -C Release --output-on-failure
-          if ($LASTEXITCODE -ne 0) { throw 'Shared C++ connection tests failed.' }
+          $qtBin = Split-Path (Get-Command windeployqt -ErrorAction Stop).Source
+          $env:PATH = "$qtBin;$env:PATH"
+          ctest --test-dir desktop/build -C Release --output-on-failure --no-tests=error --output-junit (Join-Path $PWD 'desktop/build/native-tests.xml')
+          if ($LASTEXITCODE -ne 0) { throw 'Native connection, encrypted-session, or draft-recovery tests failed.' }
       - name: Deploy Qt, bundled Node, backend, and build one-click installer
         id: package
         run: ./desktop/scripts/package.ps1
@@ -93,5 +95,8 @@ jobs:
         uses: actions/upload-artifact@v6
         with:
           name: desktop-smoke-reports
-          path: ${{ runner.temp }}/shunshoupai-installer-test/reports/
+          path: |
+            ${{ runner.temp }}/shunshoupai-installer-test/reports/
+            desktop/build/native-tests.xml
+            desktop/build/Testing/Temporary/LastTest.log
           if-no-files-found: ignore

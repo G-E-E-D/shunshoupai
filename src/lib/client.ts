@@ -80,6 +80,13 @@ export function touchesWindow(
 export function localInput(iso: string): string {
   return `${shanghaiDay(new Date(iso))}T${clockTime(iso)}`;
 }
+export function moveEventStart(start: string, end: string, nextStart: string): string {
+  const duration = Date.parse(`${end}+08:00`) - Date.parse(`${start}+08:00`);
+  const next = Date.parse(`${nextStart}+08:00`);
+  if (!Number.isFinite(next) || !Number.isFinite(duration) || duration <= 0 || duration > 86_400_000)
+    return end;
+  return localInput(new Date(next + duration).toISOString());
+}
 export function clockTime(iso: string): string {
   return new Intl.DateTimeFormat("zh-CN", {
     timeZone: "Asia/Shanghai",

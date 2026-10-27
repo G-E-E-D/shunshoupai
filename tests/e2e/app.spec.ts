@@ -79,6 +79,11 @@ test("two independent devices parse, review, save, synchronize edits, complete a
   const mobile = await mobileContext.newPage();
   try {
     await authenticate(mobile, email, false);
+    const agendaTop = await mobile.locator(".agenda-column").evaluate(element => element.getBoundingClientRect().top);
+    const composerTop = await mobile.locator(".composer-card").evaluate(element => element.getBoundingClientRect().top);
+    expect(agendaTop).toBeLessThan(composerTop);
+    await mobile.getByRole("button", { name: "一句话安排", exact: true }).click();
+    await expect(mobile.getByLabel("描述你的日程安排")).toBeFocused();
     await mobile.getByRole("button", { name: "七天", exact: true }).click();
     await page.getByLabel("描述你的日程安排").fill(example);
     await page.getByRole("button", { name: "帮我整理一下" }).click();
@@ -379,4 +384,126 @@ test("an open page follows Shanghai midnight without a hydration mismatch", asyn
   await expect(page.locator(".current-date strong")).toHaveText(dayLabel(addDays(today, 1), true));
   await expect(page.locator(".current-date")).toContainText("今天");
   expect(hydrationErrors).toEqual([]);
+});
+
+test("reviewed and manual drafts survive refresh without being submitted", async ({ page }) => {
+  await authenticate(page, `draft-recovery-${randomUUID()}@example.com`);
+  await page.getByLabel("描述你的日程安排").fill("今天上午九点到十点复盘");
+  await page.getByRole("button", { name: "帮我整理一下" }).click();
+  await expect(page.getByLabel("草稿 1 标题")).toHaveValue("复盘");
+  await page.getByLabel("草稿 1 标题").fill("还没写完的复盘");
+  await page.getByLabel("草稿 1 开始时间").fill(`${today}T11:00`);
+  await page.getByLabel("草稿 1 结束时间").fill(`${today}T12:00`);
+  await page.reload();
+  await expect(page.getByLabel("草稿 1 标题")).toHaveValue("还没写完的复盘");
+  await expect(page.getByLabel("草稿 1 开始时间")).toHaveValue(`${today}T11:00`);
+  await expect(page.getByRole("button", { name: "确认保存 1 项", exact: true })).toBeEnabled();
+  expect(await list(page.request)).toHaveLength(0);
+
+  await page.getByRole("button", { name: "手动添加", exact: true }).click();
+  await page.getByRole("dialog").getByLabel("日程标题", { exact: true }).fill("手动输入的安排");
+  await page.getByRole("dialog").getByLabel("开始时间", { exact: true }).fill(`${today}T14:00`);
+  await expect(page.getByRole("dialog").getByLabel("结束时间", { exact: true })).toHaveValue(`${today}T15:00`);
+  await page.getByRole("button", { name: "关闭弹窗", exact: true }).click();
+  await page.reload();
+  await expect(page.locator(".sync-badge")).toHaveText("已同步");
+  await page.getByRole("button", { name: "手动添加", exact: true }).click();
+  await expect(page.getByRole("dialog").getByLabel("日程标题", { exact: true })).toHaveValue("手动输入的安排");
+  await expect(page.getByRole("dialog").getByLabel("开始时间", { exact: true })).toHaveValue(`${today}T14:00`);
+  await page.getByRole("button", { name: "保存日程", exact: true }).click();
+  await expect(page.getByRole("dialog")).not.toBeVisible();
+  expect(await list(page.request)).toHaveLength(1);
+  await page.getByRole("button", { name: "手动添加", exact: true }).click();
+  await expect(page.getByRole("dialog").getByLabel("日程标题", { exact: true })).toHaveValue("");
+});
+
+test("a failed startup session request automatically recovers the existing login", async ({ page }) => {
+  await authenticate(page, `session-recovery-${randomUUID()}@example.com`);
+  let attempts = 0;
+  await page.route("**/api/auth/session", async route => {
+    attempts++;
+    if (attempts === 1) await route.abort("failed");
+    else await route.continue();
+  });
+  await page.reload();
+  await expect(page.locator(".sync-badge")).toHaveText("同步待恢复");
+  await expect(page.locator(".sync-badge")).toHaveText("已同步", { timeout: 20_000 });
+  await expect(page.getByRole("button", { name: "打开账号设置", exact: true })).toBeVisible();
+  expect(attempts).toBeGreaterThanOrEqual(2);
+});
+
+test("background polling lets a slow refresh finish without discarding its result", async ({ page }) => {
+  await authenticate(page, `slow-refresh-${randomUUID()}@example.com`);
+  await page.request.post("/api/events/commit", { data: { request_id: randomUUID(), events: [draft("慢网络仍能看到的新日程")] } });
+  let attempts = 0;
+  let release!: () => void;
+  const gate = new Promise<void>(resolve => { release = resolve; });
+  await page.route("**/api/events?**", async route => {
+    attempts++;
+    const response = await route.fetch();
+    await gate;
+    await route.fulfill({ response });
+  });
+  await page.clock.install();
+  await page.getByRole("button", { name: "重新同步日程", exact: true }).click();
+  await expect.poll(() => attempts).toBe(1);
+  await page.clock.fastForward(9000);
+  release();
+  await expect(page.getByRole("heading", { name: "慢网络仍能看到的新日程", exact: true })).toBeVisible();
+  expect(attempts).toBe(1);
+});
+
+test("a restored edit keeps its original version until the user resolves a remote update", async ({ page }) => {
+  await authenticate(page, `editor-conflict-${randomUUID()}@example.com`);
+  const created = await page.request.post("/api/events/commit", {
+    data: { request_id: randomUUID(), events: [draft("原始安排")] },
+  });
+  const event: ScheduleEvent = (await created.json()).events[0];
+  await page.getByRole("button", { name: "重新同步日程", exact: true }).click();
+  await page.getByRole("button", { name: "编辑日程：原始安排", exact: true }).click();
+  await page.getByRole("dialog").getByLabel("日程标题", { exact: true }).fill("手机未完成的编辑");
+  const remote = await page.request.patch(`/api/events/${event.id}`, {
+    data: { base_version: 1, title: "电脑更新的安排", start_local: `${today}T10:00:00`, end_local: `${today}T11:00:00` },
+  });
+  expect(remote.status()).toBe(200);
+  const staleResponse = page.waitForResponse(response => response.request().method() === "PATCH" && response.url().endsWith(`/api/events/${event.id}`));
+  await page.getByRole("button", { name: "保存日程", exact: true }).click();
+  const rejected = await staleResponse;
+  expect(rejected.request().postDataJSON().base_version).toBe(1);
+  expect(rejected.status()).toBe(409);
+  await expect(page.getByRole("dialog").getByText("另一端已更新这项日程，你的编辑草稿仍然保留。", { exact: true })).toBeVisible();
+  await expect(page.getByRole("dialog").getByLabel("日程标题", { exact: true })).toHaveValue("手机未完成的编辑");
+  await page.getByRole("button", { name: "关闭弹窗", exact: true }).click();
+  await page.reload();
+  await page.getByRole("button", { name: "编辑日程：电脑更新的安排", exact: true }).click();
+  await expect(page.getByRole("dialog").getByLabel("日程标题", { exact: true })).toHaveValue("手机未完成的编辑");
+  await expect(page.getByRole("button", { name: "保存日程", exact: true })).toBeDisabled();
+  await expect(page.getByRole("dialog").getByText(new RegExp(`${today} 10:00`))).toBeVisible();
+  // A second close/reopen must not silently adopt the newer base version.
+  await page.getByRole("button", { name: "关闭弹窗", exact: true }).click();
+  await page.getByRole("button", { name: "编辑日程：电脑更新的安排", exact: true }).click();
+  await expect(page.getByRole("button", { name: "保存日程", exact: true })).toBeDisabled();
+  expect((await list(page.request))[0].title).toBe("电脑更新的安排");
+  const confirmed = page.waitForResponse(response => response.request().method() === "PATCH" && response.url().endsWith(`/api/events/${event.id}`));
+  await page.getByRole("button", { name: "保留我的修改并保存", exact: true }).click();
+  const accepted = await confirmed;
+  expect(accepted.request().postDataJSON().base_version).toBe(2);
+  expect(accepted.status()).toBe(200);
+  await expect(page.getByRole("dialog")).not.toBeVisible();
+  expect((await list(page.request))[0].title).toBe("手机未完成的编辑");
+
+  await page.getByRole("button", { name: "编辑日程：手机未完成的编辑", exact: true }).click();
+  await page.getByRole("dialog").getByLabel("日程标题", { exact: true }).fill("这份编辑将被放弃");
+  await page.getByRole("button", { name: "关闭弹窗", exact: true }).click();
+  const newer = await page.request.patch(`/api/events/${event.id}`, { data: { base_version: 3, title: "电脑最终版本" } });
+  expect(newer.status()).toBe(200);
+  await page.reload();
+  await page.getByRole("button", { name: "编辑日程：电脑最终版本", exact: true }).click();
+  await page.getByRole("button", { name: "使用另一端版本", exact: true }).click();
+  await expect(page.getByRole("dialog").getByLabel("日程标题", { exact: true })).toHaveValue("电脑最终版本");
+  await expect(page.getByRole("button", { name: "保存日程", exact: true })).toBeEnabled();
+  await page.getByRole("button", { name: "关闭弹窗", exact: true }).click();
+  await page.getByRole("button", { name: "编辑日程：电脑最终版本", exact: true }).click();
+  await expect(page.getByRole("dialog").getByLabel("日程标题", { exact: true })).toHaveValue("电脑最终版本");
+  await expect(page.getByRole("button", { name: "使用另一端版本", exact: true })).toHaveCount(0);
 });

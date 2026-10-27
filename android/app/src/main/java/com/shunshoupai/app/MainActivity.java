@@ -78,6 +78,18 @@ public final class MainActivity extends ComponentActivity {
     private boolean tryingLegacyRoot;
     private String pendingPairingFragment = "";
     private int loadGeneration;
+    private OfflineScheduleView offlineScreen;
+    private LocalScheduleStore scheduleStore;
+    private ScheduleSync scheduleSync;
+    private boolean foreground;
+    private boolean awaitingPairing;
+    private final Runnable syncTick = new Runnable() {
+        @Override public void run() {
+            if (!foreground) return;
+            syncSchedules();
+            handler.postDelayed(this, 15_000);
+        }
+    };
 
     private final ActivityResultLauncher<ScanOptions> qrScanner = registerForActivityResult(new ScanContract(), result -> {
         if (result.getContents() != null) {
@@ -118,6 +130,23 @@ public final class MainActivity extends ComponentActivity {
         compatibilityRendering = state != null && state.getBoolean(STATE_COMPATIBILITY, false);
         configureWebView();
 
+        scheduleStore = new LocalScheduleStore(this);
+        scheduleSync = new ScheduleSync(scheduleStore, handler, (origin, scope, message, loginRequired) -> {
+            if (!origin.equals(serverAddress) || changingServer) return;
+            if (scope != null) offlineScreen.setScope(scope);
+            offlineScreen.setStatus(message);
+            if (awaitingPairing && scope != null && !loginRequired) {
+                awaitingPairing = false;
+                showOfflineScreen();
+            }
+        });
+        offlineScreen = new OfflineScheduleView(this, scheduleStore, this::showConnectionSettings, () -> {
+            if (serverAddress.isEmpty()) showConnectionSettings();
+            else reloadService();
+        }, this::syncSchedules);
+        offlineScreen.setId(R.id.offline_screen);
+        ((FrameLayout) findViewById(R.id.root)).addView(offlineScreen, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+
         connectButton.setOnClickListener(view -> connectFromInput());
         findViewById(R.id.scan_button).setOnClickListener(view -> startQrScanner());
         serverInput.setOnEditorActionListener((view, actionId, event) -> {
@@ -138,7 +167,8 @@ public final class MainActivity extends ComponentActivity {
             return true;
         });
         findViewById(R.id.error_settings).setOnClickListener(view -> showConnectionSettings());
-        findViewById(R.id.cancel_connection).setOnClickListener(view -> showWebScreen());
+        findViewById(R.id.cancel_connection).setOnClickListener(view -> showOfflineScreen());
+        findViewById(R.id.error_offline).setOnClickListener(view -> showOfflineScreen());
         getOnBackPressedDispatcher().addCallback(this, new OnBackPressedCallback(true) {
             @Override public void handleOnBackPressed() { navigateBack(); }
         });
@@ -148,17 +178,44 @@ public final class MainActivity extends ComponentActivity {
             try {
                 serverAddress = ServerAddress.normalize(saved);
                 serverInput.setText(serverAddress);
-                showWebScreen();
-                // Restore the account through HttpOnly cookies and reload the
-                // known application route instead of old browser display state.
-                reloadService();
-                if (state != null && !state.getBoolean(STATE_ACTIVE, true)) showConnectionSettings();
+                offlineScreen.setScope(scheduleStore.cachedScope(serverAddress));
             } catch (IllegalArgumentException error) {
                 preferences.edit().remove(SERVER_KEY).apply();
                 serverAddress = "";
-                showConnectionSettings();
             }
         }
+        showOfflineScreen();
+        if(state!=null)offlineScreen.restoreEditor(state.getString("offline_edit_id"));
+    }
+
+    private void syncSchedules() {
+        if (scheduleSync == null || changingServer || !foreground || offlineScreen == null) return;
+        if(offlineScreen.getVisibility()==View.VISIBLE) {scheduleSync.sync(serverAddress);return;}
+        // Account changes inside the WebView own their refresh-cookie lifecycle.
+        // Only bootstrap once after a QR has visibly finished authentication.
+        if(awaitingPairing && pageReady && webView!=null && webScreen.getVisibility()==View.VISIBLE) {
+            final WebView expected=webView;final String origin=serverAddress;
+            expected.evaluateJavascript("Boolean(document.querySelector('header button[aria-label=\"打开账号设置\"]'))",value->{
+                if("true".equals(value)&&awaitingPairing&&expected==webView&&origin.equals(serverAddress)&&!changingServer&&foreground&&webScreen.getVisibility()==View.VISIBLE)scheduleSync.sync(origin);
+            });
+        }
+    }
+
+    private void showOfflineScreen() {
+        hideKeyboard();
+        setupScreen.setVisibility(View.GONE);
+        webScreen.setVisibility(View.GONE);
+        offlineScreen.setVisibility(View.VISIBLE);
+        offlineScreen.refresh();
+        if (webView != null) {
+            webView.stopLoading();
+            webView.loadUrl("about:blank");
+            webView.onPause();
+            pageReady=false;
+            handler.removeCallbacks(loadTimeout);
+            handler.removeCallbacks(contentCheck);
+        }
+        syncSchedules();
     }
 
     private void applyWindowInsets() {
@@ -390,6 +447,8 @@ public final class MainActivity extends ComponentActivity {
 
     private void connectTo(String next, String initialUrl) {
         hideKeyboard();
+        scheduleSync.invalidate();
+        awaitingPairing = initialUrl != null;
         if (serverAddress.equals(next) && initialUrl == null) {
             showWebScreen();
             reloadService();
@@ -420,6 +479,7 @@ public final class MainActivity extends ComponentActivity {
             serverAddress = next;
             preferences.edit().putString(SERVER_KEY, next).apply();
             serverInput.setText(next);
+            offlineScreen.setScope(scheduleStore.cachedScope(next));
             changingServer = false;
             connectButton.setEnabled(true);
             showWebScreen();
@@ -429,17 +489,21 @@ public final class MainActivity extends ComponentActivity {
 
     private void showConnectionSettings() {
         hideKeyboard();
+        scheduleSync.invalidate();
+        offlineScreen.setVisibility(View.GONE);
         webScreen.setVisibility(View.GONE);
         setupScreen.setVisibility(View.VISIBLE);
         connectionError.setVisibility(View.GONE);
         serverInput.setText(serverAddress);
-        findViewById(R.id.cancel_connection).setVisibility(serverAddress.isEmpty() ? View.GONE : View.VISIBLE);
+        findViewById(R.id.cancel_connection).setVisibility(View.VISIBLE);
         if (webView != null) webView.onPause();
     }
 
     private void showWebScreen() {
         if (serverAddress.isEmpty()) return;
         hideKeyboard();
+        if(webScreen.getVisibility()!=View.VISIBLE)scheduleSync.invalidate();
+        offlineScreen.setVisibility(View.GONE);
         setupScreen.setVisibility(View.GONE);
         webScreen.setVisibility(View.VISIBLE);
         try {
@@ -529,6 +593,7 @@ public final class MainActivity extends ComponentActivity {
                             if (clearHistoryOnReady) { expected.clearHistory(); clearHistoryOnReady = false; }
                             expected.requestLayout();
                             expected.invalidate();
+                            handler.postDelayed(MainActivity.this::syncSchedules, 1_000);
                         }
                     });
                 } else if ("\"error\"".equals(value)) showLoadError(getString(R.string.webview_not_ready));
@@ -577,14 +642,12 @@ public final class MainActivity extends ComponentActivity {
 
     private void navigateBack() {
         if (changingServer) return;
-        if (setupScreen.getVisibility() == View.VISIBLE) {
-            if (!serverAddress.isEmpty()) showWebScreen();
-            else finish();
-        } else if (webView != null && webView.canGoBack() && !mainFrameFailed) webView.goBack();
-        else finish();
+        if (offlineScreen.getVisibility() == View.VISIBLE) finish();
+        else showOfflineScreen();
     }
 
     @Override protected void onSaveInstanceState(Bundle state) {
+        state.putString("offline_edit_id",offlineScreen.editingId());
         state.putString(STATE_SERVER, serverAddress);
         state.putBoolean(STATE_ACTIVE, webScreen.getVisibility() == View.VISIBLE);
         state.putBoolean(STATE_COMPATIBILITY, compatibilityRendering);
@@ -594,6 +657,8 @@ public final class MainActivity extends ComponentActivity {
     }
 
     @Override protected void onPause() {
+        foreground = false;
+        handler.removeCallbacks(syncTick);
         if (webView != null) webView.onPause();
         CookieManager.getInstance().flush();
         super.onPause();
@@ -601,6 +666,9 @@ public final class MainActivity extends ComponentActivity {
 
     @Override protected void onResume() {
         super.onResume();
+        foreground = true;
+        handler.removeCallbacks(syncTick);
+        handler.post(syncTick);
         if (webView != null && webScreen != null && webScreen.getVisibility() == View.VISIBLE) {
             webView.onResume();
             webView.invalidate();
@@ -610,6 +678,8 @@ public final class MainActivity extends ComponentActivity {
     }
 
     @Override protected void onDestroy() {
+        if (offlineScreen != null) offlineScreen.destroy();
+        if (scheduleSync != null) scheduleSync.close();
         handler.removeCallbacksAndMessages(null);
         if (webView != null) {
             webView.stopLoading();

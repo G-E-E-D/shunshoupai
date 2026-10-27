@@ -2,6 +2,7 @@
 #include "connection.h"
 #include "modern_calendar.h"
 #include "qrcodegen.hpp"
+#include "draft_state.h"
 #include <QApplication>
 #include <QButtonGroup>
 #include <QComboBox>
@@ -21,6 +22,7 @@
 #include <QPainter>
 #include <QPushButton>
 #include <QScreen>
+#include <QSignalBlocker>
 #include <QScrollArea>
 #include <QStyle>
 #include <QStyledItemDelegate>
@@ -195,7 +197,7 @@ void message(QLabel *label, const QString &value, bool error = false) {
 }
 
 void footer(QVBoxLayout *layout, QPushButton *primary, QPushButton *secondary,
-            QPushButton *leading = nullptr) {
+            QWidget *leading = nullptr) {
     auto *row = new QHBoxLayout;
     row->setContentsMargins(0, 6, 0, 0);
     row->setSpacing(10);
@@ -230,6 +232,39 @@ void information(QWidget *parent, const QString &title, const QString &descripti
     dialog.exec();
 }
 
+// 0 = decide later, 1 = use the remote state, 2 = explicitly keep local edits.
+int resolveEventConflict(QWidget *parent, const QJsonObject &remote, const QJsonObject &mine, bool deleted) {
+    QDialog dialog(parent);
+    auto ui = prepare(dialog, deleted ? "eventDeletedDialog" : "eventConflictDialog",
+        deleted ? text("这条日程已在另一端删除") : text("这条日程在另一端更新了"),
+        text("你的修改仍保留在本机。核对后再选择如何处理。"), 660);
+    auto addVersion = [&](const QString &heading, const QString &title, const QString &start, const QString &end, const QString &state) {
+        ui.body->addWidget(copy(heading, "fieldLabel"));
+        ui.body->addWidget(copy(title, "eventTitle"));
+        const auto startTime = QDateTime::fromString(start, Qt::ISODate);
+        const auto endTime = QDateTime::fromString(end, Qt::ISODate);
+        ui.body->addWidget(copy(startTime.toString("yyyy-MM-dd HH:mm") + " – " + endTime.toString("yyyy-MM-dd HH:mm")
+            + text(" · 上海时区") + state, "fieldHint"));
+    };
+    if (!deleted) addVersion(text("另一端的最新日程"), remote.value("title").toString(),
+        QDateTime::fromString(remote.value("start_at").toString(), Qt::ISODate).toTimeZone(QTimeZone("Asia/Shanghai")).toString(Qt::ISODate),
+        QDateTime::fromString(remote.value("end_at").toString(), Qt::ISODate).toTimeZone(QTimeZone("Asia/Shanghai")).toString(Qt::ISODate),
+        remote.value("status") == "completed" ? text(" · 已完成") : text(" · 待进行"));
+    addVersion(text("你保留的修改"), mine.value("title").toString(), mine.value("start_local").toString(), mine.value("end_local").toString(), {});
+    auto *keep = action(deleted ? text("保留为新日程") : text("保留我的修改并保存"), "primary");
+    keep->setProperty("controlId", "eventKeepMine");
+    auto *useRemote = action(deleted ? text("放弃本机修改") : text("使用另一端版本"), "textButton");
+    useRemote->setProperty("controlId", "eventUseRemote");
+    auto *later = action(text("稍后处理"), "textButton");
+    later->setProperty("controlId", "eventResolveLater");
+    int choice = 0;
+    QObject::connect(keep, &QPushButton::clicked, &dialog, [&] { choice = 2; dialog.accept(); });
+    QObject::connect(useRemote, &QPushButton::clicked, &dialog, [&] { choice = 1; dialog.accept(); });
+    QObject::connect(later, &QPushButton::clicked, &dialog, &QDialog::reject);
+    footer(ui.body, keep, later, useRemote);
+    return dialog.exec() == QDialog::Accepted ? choice : 0;
+}
+
 QStringList strings(const QJsonArray &values) {
     QStringList result;
     for (const auto &value : values) result << value.toString();
@@ -241,7 +276,7 @@ QDateTime localTime(const QString &value) {
     return QDateTime::fromString(value, Qt::ISODate).toTimeZone(QTimeZone("Asia/Shanghai"));
 }
 QString pendingKey(const QString &origin, const QString &owner) {
-    return "pending/" + QString::fromLatin1(QCryptographicHash::hash((origin + owner).toUtf8(), QCryptographicHash::Sha256).toHex());
+    return DraftState::key("pending", origin, owner);
 }
 
 bool usableOrigin(const QString &value, QUrl &url, bool phone = false) {
@@ -257,6 +292,26 @@ bool usableOrigin(const QString &value, QUrl &url, bool phone = false) {
     return true;
 }
 
+class DraftTitleDelegate final : public QStyledItemDelegate {
+public:
+    using QStyledItemDelegate::QStyledItemDelegate;
+    QWidget *createEditor(QWidget *parent, const QStyleOptionViewItem &, const QModelIndex &) const override {
+        auto *editor = new QLineEdit(parent);
+        auto *delegate = const_cast<DraftTitleDelegate *>(this);
+        QObject::connect(editor, &QLineEdit::textChanged, delegate, [delegate, editor] { emit delegate->commitData(editor); });
+        return editor;
+    }
+    void setEditorData(QWidget *editor, const QModelIndex &index) const override {
+        const QSignalBlocker blocked(editor);
+        auto *title = static_cast<QLineEdit *>(editor);
+        const auto value = index.data(Qt::EditRole).toString();
+        if (title->text() != value) title->setText(value);
+    }
+    void setModelData(QWidget *editor, QAbstractItemModel *model, const QModelIndex &index) const override {
+        model->setData(index, static_cast<QLineEdit *>(editor)->text(), Qt::EditRole);
+    }
+};
+
 class DraftTimeDelegate final : public QStyledItemDelegate {
 public:
     using QStyledItemDelegate::QStyledItemDelegate;
@@ -266,11 +321,15 @@ public:
         editor->setMaximumDate(QDate(2100, 12, 31));
         editor->setDisplayFormat("yyyy-MM-dd HH:mm");
         installModernDateTimeEdit(editor);
+        auto *delegate = const_cast<DraftTimeDelegate *>(this);
+        QObject::connect(editor, &QDateTimeEdit::dateTimeChanged, delegate, [delegate, editor] { emit delegate->commitData(editor); });
         return editor;
     }
     void setEditorData(QWidget *editor, const QModelIndex &index) const override {
         auto *date = static_cast<QDateTimeEdit *>(editor);
-        date->setDateTime(QDateTime::fromString(index.data(Qt::EditRole).toString(), Qt::ISODate));
+        const QSignalBlocker blocked(date);
+        const auto value = QDateTime::fromString(index.data(Qt::EditRole).toString(), Qt::ISODate);
+        if (date->dateTime() != value) date->setDateTime(value);
     }
     void setModelData(QWidget *editor, QAbstractItemModel *model, const QModelIndex &index) const override {
         auto *date = static_cast<QDateTimeEdit *>(editor);
@@ -285,16 +344,15 @@ public:
 
 void MainWindow::auth() {
     if (!owner().isEmpty()) {
-        if (!confirm(this, text("退出当前账号？"), text("待确认的保存会按账号保留。下次登录后，可以继续确认结果。"), text("退出账号"))) return;
+        if (!confirm(this, text("退出当前账号？"), text("未提交的草稿与待确认保存会按账号保留，下次登录后可以继续。"), text("退出账号"))) return;
         const auto result = api.call("POST", "/api/auth/logout");
-        if (!result.ok()) { showError(result); return; }
-        api.reset(api.origin);
-        setSession(result.data);
-        status->setText(text("已退出登录。"));
+        api.forgetSession();
+        setSession({});
+        status->setText(result.ok() ? text("已退出登录。") : text("已退出本机登录。服务暂时不可用，远端会话将在到期后失效。"));
         return;
     }
     QDialog dialog(this);
-    auto ui = prepare(dialog, "authDialog", text("欢迎回来"), text("登录自己的账号，让电脑与手机接着安排。"), 508);
+    auto ui = prepare(dialog, "authDialog", text("欢迎回来"), text("登录一次，下次打开会自动接着使用。"), 508);
     auto *tabs = new QFrame;
     tabs->setObjectName("segmentedBar");
     auto *tabLayout = new QHBoxLayout(tabs);
@@ -320,6 +378,8 @@ void MainWindow::auth() {
     email.setPlaceholderText("you@example.com");
     email.setClearButtonEnabled(true);
     email.setInputMethodHints(Qt::ImhEmailCharactersOnly | Qt::ImhNoAutoUppercase);
+    const auto emailKey = "last_email/" + QString::fromLatin1(QCryptographicHash::hash(api.origin.toUtf8(), QCryptographicHash::Sha256).toHex());
+    email.setText(settings.value(emailKey).toString());
     password.setObjectName("authPassword");
     password.setEchoMode(QLineEdit::Password);
     password.setPlaceholderText(text("输入你的密码"));
@@ -335,7 +395,7 @@ void MainWindow::auth() {
     connect(group, &QButtonGroup::idClicked, &dialog, [&](int index) {
         const bool registering = index == 1;
         ui.title->setText(registering ? text("让安排有个新家") : text("欢迎回来"));
-        ui.subtitle->setText(registering ? text("创建自己的账号，开始整理每一天。") : text("登录自己的账号，让电脑与手机接着安排。"));
+        ui.subtitle->setText(registering ? text("创建自己的账号，开始整理每一天。") : text("登录一次，下次打开会自动接着使用。"));
         submit->setText(registering ? text("创建账号") : text("登录"));
         password.setPlaceholderText(registering ? text("设置至少 8 位密码") : text("输入你的密码"));
         password.clear();
@@ -344,21 +404,22 @@ void MainWindow::auth() {
     connect(submit, &QPushButton::clicked, &dialog, [&] {
         const auto result = api.call("POST", group->checkedId() == 0 ? "/api/auth/login" : "/api/auth/register",
             {{"email", email.text().trimmed()}, {"password", password.text()}});
-        password.clear();
         if (!result.ok()) { message(notice, result.error, true); return; }
+        password.clear();
         if (result.data.value("user").isNull()) { message(notice, result.data.value("message").toString()); return; }
+        settings.setValue(emailKey, email.text().trimmed());
         setSession(result.data);
         dialog.accept();
     });
     connect(&password, &QLineEdit::returnPressed, submit, &QPushButton::click);
-    email.setFocus();
-    if (dialog.exec() == QDialog::Accepted) { refresh(); restorePending(); }
+    if (email.text().isEmpty()) email.setFocus(); else password.setFocus();
+    if (dialog.exec() == QDialog::Accepted) refresh();
     password.clear();
 }
 
 void MainWindow::drafts(QJsonArray rows, QString request) {
     QDialog dialog(this);
-    auto ui = prepare(dialog, "draftsDialog", text("确认你的安排"), text("检查标题和时间，确认后再同步到正式日程。"), 960);
+    auto ui = prepare(dialog, "draftsDialog", text("确认你的安排"), text("修改会自动保留。只有点击确认保存，才会加入正式日程。"), 960);
     auto *zoneHint = copy(text("上海时区 · UTC+8"), "fieldHint");
     ui.body->addWidget(zoneHint);
     QTableWidget table(rows.size(), 4);
@@ -373,6 +434,7 @@ void MainWindow::drafts(QJsonArray rows, QString request) {
     table.setSelectionBehavior(QAbstractItemView::SelectRows);
     table.setSelectionMode(QAbstractItemView::SingleSelection);
     table.setMinimumHeight(qBound(180, rows.size() * 58 + 50, 360));
+    table.setItemDelegateForColumn(0, new DraftTitleDelegate(&table));
     table.setItemDelegateForColumn(1, new DraftTimeDelegate(&table));
     table.setItemDelegateForColumn(2, new DraftTimeDelegate(&table));
     for (int i = 0; i < rows.size(); ++i) {
@@ -396,23 +458,63 @@ void MainWindow::drafts(QJsonArray rows, QString request) {
     remove->setProperty("controlId", "draftRemove");
     auto *cancel = action(text("暂不保存"), "textButton");
     cancel->setProperty("controlId", "draftCancel");
-    footer(ui.body, save, cancel, remove);
+    auto *discard = action(text("放弃草稿"), "textButton");
+    discard->setProperty("controlId", "draftDiscard");
+    auto *leading = new QWidget;
+    auto *leadingLayout = new QHBoxLayout(leading);
+    leadingLayout->setContentsMargins(0, 0, 0, 0);
+    leadingLayout->addWidget(remove); leadingLayout->addWidget(discard);
+    footer(ui.body, save, cancel, leading);
     const QString key = pendingKey(api.origin, owner());
+    const QString reviewKey = DraftState::key("review", api.origin, owner());
+    bool finished = false;
+    auto collectRows = [&] {
+        for (int i = 0; i < rows.size(); ++i) {
+            auto event = rows[i].toObject();
+            event.insert("title", table.item(i, 0)->text());
+            event.insert("start_local", table.item(i, 1)->text());
+            event.insert("end_local", table.item(i, 2)->text());
+            rows[i] = event;
+        }
+    };
+    auto preserveReview = [&] {
+        if (finished || !request.isEmpty()) return;
+        collectRows();
+        if (rows.isEmpty()) { settings.remove(reviewKey); settings.sync(); }
+        else DraftState::write(settings, reviewKey, {{"events", rows}});
+        if (settings.status() != QSettings::NoError)
+            message(notice, text("草稿暂时无法写入本机，请保留窗口并检查磁盘空间。"), true);
+    };
     if (!request.isEmpty()) {
         table.setEditTriggers(QAbstractItemView::NoEditTriggers);
         remove->setEnabled(false);
+        discard->hide();
         save->setText(text("确认上次保存结果"));
         message(notice, text("上次保存结果待确认，将使用原编号与内容核实，避免重复创建。"));
-    }
+    } else preserveReview();
+    connect(&table, &QTableWidget::itemChanged, &dialog, [&](QTableWidgetItem *) { preserveReview(); });
     connect(remove, &QPushButton::clicked, &dialog, [&] {
         const int selected = table.currentRow();
-        if (selected >= 0) { table.removeRow(selected); rows.removeAt(selected); }
+        if (selected >= 0) {
+            const QSignalBlocker blocked(&table);
+            table.removeRow(selected); rows.removeAt(selected);
+            preserveReview();
+        }
+    });
+    connect(discard, &QPushButton::clicked, &dialog, [&] {
+        if (!request.isEmpty()) return;
+        if (!confirm(&dialog, text("放弃这份草稿？"), text("这会删除尚未提交的修改，正式日程不受影响。"), text("放弃草稿"))) return;
+        finished = true;
+        settings.remove(reviewKey); settings.sync();
+        dialog.reject();
     });
     connect(cancel, &QPushButton::clicked, &dialog, &QDialog::reject);
     connect(save, &QPushButton::clicked, &dialog, [&] {
         if (table.rowCount() == 0) { message(notice, text("至少保留一项草稿。"), true); return; }
         table.clearFocus();
+        const bool recoveringPending = !request.isEmpty();
         if (request.isEmpty()) {
+            collectRows();
             for (int i = 0; i < rows.size(); ++i) {
                 auto event = rows[i].toObject();
                 event.insert("title", table.item(i, 0)->text().trimmed());
@@ -425,11 +527,22 @@ void MainWindow::drafts(QJsonArray rows, QString request) {
         const QJsonObject payload{{"request_id", request}, {"events", rows}};
         settings.setValue(key, QString::fromUtf8(QJsonDocument(payload).toJson(QJsonDocument::Compact)));
         settings.sync();
+        if (settings.status() != QSettings::NoError) {
+            if (!recoveringPending) {
+                request.clear();
+                settings.remove(key);
+                preserveReview();
+            }
+            message(notice, text("暂时无法保存请求编号，请保留窗口并检查磁盘空间后重试。"), true);
+            return;
+        }
         table.setEditTriggers(QAbstractItemView::NoEditTriggers);
         remove->setEnabled(false);
+        discard->hide();
         auto result = api.call("POST", "/api/events/commit", payload);
         if (result.ok()) {
-            settings.remove(key);
+            finished = true;
+            settings.remove(key); settings.remove(reviewKey); settings.sync();
             status->setText(result.data.value("replayed").toBool() ? text("已确认上次保存成功，没有重复创建。") : text("日程已保存。"));
             dialog.accept();
         } else {
@@ -438,8 +551,11 @@ void MainWindow::drafts(QJsonArray rows, QString request) {
             if (code == "VALIDATION_ERROR" || code == "TIME_CONFLICT") {
                 settings.remove(key);
                 request.clear();
+                preserveReview();
                 table.setEditTriggers(QAbstractItemView::DoubleClicked | QAbstractItemView::EditKeyPressed);
                 remove->setEnabled(true);
+                discard->show();
+                save->setText(text("确认保存"));
             } else {
                 message(notice, result.error + text(" 使用原编号重试，或稍后从主界面恢复。"), true);
                 save->setText(text("确认上次保存结果"));
@@ -447,14 +563,24 @@ void MainWindow::drafts(QJsonArray rows, QString request) {
         }
     });
     dialog.exec();
+    preserveReview();
     refresh();
 }
 
 void MainWindow::editEvent(QJsonObject event) {
     if (owner().isEmpty()) { auth(); if (owner().isEmpty()) return; }
+    if (event.isEmpty() && (!DraftState::read(settings, pendingKey(api.origin, owner())).isEmpty()
+        || !DraftState::read(settings, DraftState::key("review", api.origin, owner())).isEmpty())) {
+        restorePending(); return;
+    }
+    const QString editorKey = DraftState::key("editor", api.origin, owner()) + "/" + (event.isEmpty() ? "new" : event.value("id").toString());
+    const auto saved = DraftState::read(settings, editorKey);
+    // Keep the version that the user actually edited. Reopening must not turn
+    // stale text into an unnoticed overwrite of another device's newer event.
+    if (!saved.isEmpty()) event = saved.value("event").toObject();
     QDialog dialog(this);
-    auto ui = prepare(dialog, "eventDialog", event.isEmpty() ? text("添加一项安排") : text("编辑日程"), text("给重要的事留一点时间。"), 590);
-    QLineEdit title(event.value("title").toString());
+    auto ui = prepare(dialog, "eventDialog", event.isEmpty() ? text("添加一项安排") : text("编辑日程"), text("修改会自动保留，关闭后可继续编辑。"), 590);
+    QLineEdit title(saved.isEmpty() ? event.value("title").toString() : saved.value("title").toString());
     title.setObjectName("eventTitle");
     title.setPlaceholderText(text("为这项安排取个名字"));
     title.setMaxLength(120);
@@ -471,30 +597,108 @@ void MainWindow::editEvent(QJsonObject event) {
     }
     start.setDateTime(event.isEmpty() ? QDateTime(day->date(), QTime(9, 0)) : QDateTime::fromString(localTime(event.value("start_at").toString()).toString("yyyy-MM-ddTHH:mm:ss"), Qt::ISODate));
     end.setDateTime(event.isEmpty() ? start.dateTime().addSecs(3600) : QDateTime::fromString(localTime(event.value("end_at").toString()).toString("yyyy-MM-ddTHH:mm:ss"), Qt::ISODate));
+    const auto originalStart = start.dateTime();
+    const auto originalEnd = end.dateTime();
+    if (!saved.isEmpty()) {
+        start.setDateTime(QDateTime::fromString(saved.value("start_local").toString(), Qt::ISODate));
+        end.setDateTime(QDateTime::fromString(saved.value("end_local").toString(), Qt::ISODate));
+    }
     field(ui.body, text("开始时间"), &start);
     field(ui.body, text("结束时间"), &end, text("上海时区（UTC+8）"));
     auto *notice = messageArea(ui.body);
-    auto *cancel = action(text("取消"), "textButton");
+    auto *cancel = action(text("稍后继续"), "textButton");
+    cancel->setProperty("controlId", "eventCancel");
+    auto *discard = action(text("放弃修改"), "textButton");
+    discard->setProperty("controlId", "eventDiscard");
     auto *save = action(event.isEmpty() ? text("检查草稿") : text("保存更改"), "primary");
     save->setProperty("controlId", "eventSave");
     save->setDefault(true);
-    footer(ui.body, save, cancel);
+    footer(ui.body, save, cancel, discard);
+    bool finished = false;
+    auto preserveEditor = [&] {
+        if (finished) return;
+        const bool changed = title.text() != event.value("title").toString()
+            || start.dateTime() != originalStart || end.dateTime() != originalEnd;
+        discard->setEnabled(changed);
+        if (!changed) { settings.remove(editorKey); settings.sync(); return; }
+        DraftState::write(settings, editorKey, {{"event", event}, {"title", title.text()},
+            {"start_local", start.dateTime().toString("yyyy-MM-ddTHH:mm:ss")},
+            {"end_local", end.dateTime().toString("yyyy-MM-ddTHH:mm:ss")}});
+        if (settings.status() != QSettings::NoError)
+            message(notice, text("修改暂时无法写入本机，请保留窗口并检查磁盘空间。"), true);
+    };
+    connect(&title, &QLineEdit::textChanged, &dialog, [&](const QString &) { preserveEditor(); });
+    connect(&start, &QDateTimeEdit::dateTimeChanged, &dialog, [&](const QDateTime &) { preserveEditor(); });
+    connect(&end, &QDateTimeEdit::dateTimeChanged, &dialog, [&](const QDateTime &) { preserveEditor(); });
+    connect(discard, &QPushButton::clicked, &dialog, [&] {
+        if (!confirm(&dialog, text("放弃这次修改？"), text("正式日程会保持原样，这次尚未保存的修改将被删除。"), text("放弃修改"))) return;
+        finished = true;
+        settings.remove(editorKey); settings.sync();
+        dialog.reject();
+    });
+    preserveEditor();
     connect(cancel, &QPushButton::clicked, &dialog, &QDialog::reject);
     connect(save, &QPushButton::clicked, &dialog, [&] {
         QJsonObject patch{{"title", title.text().trimmed()}, {"start_local", start.dateTime().toString("yyyy-MM-ddTHH:mm:ss")}, {"end_local", end.dateTime().toString("yyyy-MM-ddTHH:mm:ss")}};
-        if (event.isEmpty()) {
-            patch.insert("timezone", "Asia/Shanghai"); patch.insert("time_source", "explicit"); patch.insert("assumptions", QJsonArray{});
+        auto keepAsNew = [&] {
+            if (!DraftState::read(settings, pendingKey(api.origin, owner())).isEmpty()) {
+                message(notice, text("还有一份保存结果待确认。你的修改已保留，请先确认上次保存结果，再保留为新日程。"), true);
+                return;
+            }
+            auto draft = patch;
+            draft.remove("base_version");
+            draft.insert("timezone", "Asia/Shanghai"); draft.insert("time_source", "explicit"); draft.insert("assumptions", QJsonArray{});
+            const auto reviewKey = DraftState::key("review", api.origin, owner());
+            auto reviewRows = DraftState::read(settings, reviewKey).value("events").toArray();
+            reviewRows.append(draft);
+            DraftState::write(settings, reviewKey, {{"events", reviewRows}});
+            if (settings.status() != QSettings::NoError) {
+                message(notice, text("暂时无法保存草稿，请保留窗口并检查磁盘空间。"), true); return;
+            }
+            finished = true;
+            settings.remove(editorKey); settings.sync();
             dialog.accept();
-            drafts({patch});
-            return;
-        }
+            drafts(reviewRows);
+        };
+        if (event.isEmpty()) { keepAsNew(); return; }
         patch.insert("base_version", event.value("version"));
         auto result = api.call("PATCH", "/api/events/" + event.value("id").toString(), patch);
-        if (!result.ok()) { message(notice, result.error + text(" 请刷新核实后再编辑。"), true); return; }
+        if (!result.ok()) {
+            const auto code = result.data.value("error").toObject().value("code").toString();
+            if (code != "VERSION_CONFLICT" && code != "NOT_FOUND") { message(notice, result.error, true); return; }
+            const auto latest = api.call("GET", "/api/events/" + event.value("id").toString());
+            if (!latest.ok() && latest.status != 404) {
+                message(notice, text("暂时无法核对另一端的最新日程。你的修改已保留，恢复连接后点击保存即可继续核对。"), true); return;
+            }
+            const auto remote = latest.data.value("event").toObject();
+            if (latest.ok() && (remote.value("id") != event.value("id") || remote.value("version").toInt() < 1)) {
+                message(notice, text("服务未返回可核对的最新日程。你的修改已保留。"), true); return;
+            }
+            const bool deleted = latest.status == 404 || !remote.value("deleted_at").toString().isEmpty();
+            const int choice = resolveEventConflict(&dialog, remote, patch, deleted);
+            if (choice == 0) return;
+            if (choice == 1) {
+                finished = true;
+                settings.remove(editorKey); settings.sync();
+                dialog.accept();
+                return;
+            }
+            if (deleted) { keepAsNew(); return; }
+            // Only this explicit choice authorizes using the displayed newer
+            // version. A further concurrent edit must still produce a conflict.
+            patch.insert("base_version", remote.value("version"));
+            result = api.call("PATCH", "/api/events/" + event.value("id").toString(), patch);
+            if (!result.ok()) {
+                message(notice, result.error + text(" 你的修改仍保留，再次点击保存可重新核对最新版本。"), true); return;
+            }
+        }
+        finished = true;
+        settings.remove(editorKey); settings.sync();
         dialog.accept();
     });
     title.setFocus();
     dialog.exec();
+    preserveEditor();
     refresh();
 }
 
@@ -657,7 +861,7 @@ void MainWindow::connection() {
     connect(save, &QPushButton::clicked, &dialog, [&] {
         QUrl value;
         if (!usableOrigin(address.text(), value)) { message(notice, text("请填写不含账号、路径或参数的 HTTP(S) 服务根地址。"), true); return; }
-        if (value.toString() != api.origin && !confirm(&dialog, text("切换到另一个服务？"), text("切换后会清除当前内存中的登录状态，并显示目标服务的数据。原服务的数据会保留。"), text("切换并连接"))) return;
+        if (value.toString() != api.origin && !confirm(&dialog, text("切换到另一个服务？"), text("每个服务的账号分别保留。连接后会自动恢复该服务的登录与日程。"), text("切换并连接"))) return;
         api.reset(value.toString());
         setSession({});
         settings.setValue("service_origin", api.origin);

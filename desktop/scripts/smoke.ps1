@@ -5,6 +5,8 @@ param(
 )
 $ErrorActionPreference = 'Stop'
 $Installer = (Resolve-Path -LiteralPath $Installer).Path
+$expectedVersion = (Get-Content -LiteralPath (Join-Path $PSScriptRoot '..\..\package.json') -Raw | ConvertFrom-Json).version
+if ((Get-Item -LiteralPath $Installer).VersionInfo.ProductVersion -ne $expectedVersion) { throw 'Installer version does not match package.json.' }
 if (Test-Path -LiteralPath 'HKCU:\Software\Shunshoupai') { throw 'Installer smoke requires a clean Windows user without an existing Shunshoupai installation.' }
 $TestRoot = [IO.Path]::GetFullPath($TestRoot)
 if (Test-Path -LiteralPath $TestRoot) { throw 'TestRoot must be new so existing data is never modified.' }
@@ -39,6 +41,8 @@ try {
     foreach ($relative in @('Shunshoupai.exe','runtime\node.exe','resources\backend\server.js','Qt6Core.dll','Qt6Widgets.dll','Qt6Network.dll','platforms\qwindows.dll','licenses\Qt\LGPL-3.0-only.txt')) {
         if (!(Test-Path -LiteralPath (Join-Path $installDirectory $relative))) { throw "Installer payload is missing $relative." }
     }
+    if ((Get-Item -LiteralPath (Join-Path $installDirectory 'Shunshoupai.exe')).VersionInfo.ProductVersion -ne $expectedVersion) { throw 'Installed application version does not match the release.' }
+    if ((Get-Content -LiteralPath (Join-Path $installDirectory 'resources\backend\package.json') -Raw | ConvertFrom-Json).version -ne $expectedVersion) { throw 'Installed backend version does not match the release.' }
     $env:NODE_ENV = 'production'
     $env:HOSTNAME = '127.0.0.1'
     $env:PORT = '43129'

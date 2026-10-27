@@ -1,12 +1,20 @@
 import { z } from "zod";
 import { deleteEventSchema, patchEventSchema } from "@/lib/schemas";
 import { requireAuth } from "@/lib/server/auth";
-import { mutateEvent } from "@/lib/server/events";
+import { getEvent, mutateEvent } from "@/lib/server/events";
 import { handle, rateLimit, readJson } from "@/lib/server/http";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 type Context = { params: Promise<{ id: string }> };
+
+export async function GET(_request: Request, context: Context) {
+  return handle(async () => {
+    const auth = await requireAuth();
+    const id = z.string().uuid().parse((await context.params).id);
+    return { event: await getEvent(auth, id) };
+  });
+}
 
 export async function PATCH(request: Request, context: Context) {
   return handle(async () => {

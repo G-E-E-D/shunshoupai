@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <item name="offline_screen" type="id" />
+    <item name="offline_add" type="id" />
+    <item name="offline_connect" type="id" />
+    <item name="offline_online" type="id" />
+</resources>

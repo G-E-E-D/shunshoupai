@@ -14,17 +14,28 @@ Android 使用同一台电脑的 API 服务及账号。
 
 - 数据库：`%LOCALAPPDATA%\Shunshoupai\data\app.sqlite`
 - 模型密钥加密主密钥：同目录的 `model-encryption.key`，首次保存模型配置时自动创建
+- 登录凭据：`%LOCALAPPDATA%\Shunshoupai\sessions\`，使用 Windows DPAPI 加密，仅当前 Windows 用户可解密，按服务地址和端口分别保存；不保存密码
 - 升级、重新安装或卸载程序会保留该数据目录；备份时同时备份数据库和加密主密钥
 
 本地服务监听 `0.0.0.0:43127`，桌面通过 `127.0.0.1:43127` 使用服务。
 安卓扫码时两台设备须能够访问同一服务；电脑退出后，本次启动的 API 服务也会退出。
 端口被占用会明确报告错误，不会连接到未知占用服务。
 
+登录成功后再次打开应用会自动恢复会话；暂时断网会保留登录并自动重试。退出账号会清除本机凭据，即使服务暂时不可用也能退出。切换服务时，各服务的登录分别恢复。本地登录有效期由服务端续期规则决定；云端密码登录由 Supabase 刷新会话，扫码临时授权仍遵循授权到期时间。
+
+未整理的文字按服务与账号自动保留，提醒开关和日程视图会记住上次选择；输入框中按 `Ctrl+Enter` 即可整理。后台补拉没有新数据时保留当前滚动位置和焦点。只有存在未提交草稿或待确认保存时才显示恢复入口。
+
+解析结果表格和手动编辑也会自动保存草稿，包括改过的标题、时间和移除的行。关闭弹窗或重新打开应用后，点击“继续未提交草稿”或“继续编辑日程”即可继续；恢复本身不会提交。已经发起保存但尚未确认结果的内容显示“确认上次保存结果”，始终保留原请求编号和内容，避免重复创建。草稿按服务与账号隔离，编辑现有日程会保留原版本，避免覆盖另一台设备的更新。
+
+遇到另一端更新时，会同时展示最新日程与本机修改，由你选择采用另一端内容或明确保留本机修改后保存。若另一端已删除，可将本机修改保留为新日程；不会静默覆盖或复活已删除的记录。
+
 ## 从源码构建
 
 Windows x64 开发环境：CMake 3.21+、Visual Studio 2022 C++ 工具、Qt **6.8.3**
 `msvc2022_64`（Widgets、Network）、Node.js **24**、NSIS **3.11**。
 使用 Visual Studio x64 开发终端，把 Qt 的 `bin` 加到 PATH，并设置 CMAKE_PREFIX_PATH。
+
+桌面显示版本、请求标识、EXE 文件属性和安装器版本统一读取根目录 `package.json`。打包前会检查原生应用和内置后端版本一致，版本更新后需重新构建两者。
 
 ```powershell
 npm ci
@@ -59,7 +70,7 @@ Qt 启动 API 时设置 `NODE_ENV=production`、`HOSTNAME=0.0.0.0`、`PORT=43127
 
 ```powershell
 ./desktop/scripts/smoke.ps1 `
-  -Installer desktop/dist/shunshoupai-desktop-v1.3.0-setup.exe `
+  -Installer desktop/dist/shunshoupai-desktop-v1.4.0-setup.exe `
   -TestRoot "$env:TEMP/shunshoupai-installer-smoke-new"
 ```
 

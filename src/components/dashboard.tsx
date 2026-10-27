@@ -49,6 +49,7 @@ import type {
   ModelSettingsInfo,
 } from "@/lib/types";
 import ModelSettingsPanel from "@/components/model-settings";
+import { loadEditorDraft, loadReviewDraft, saveLocalDraft } from "@/components/draft-storage";
 import { commitSchema } from "@/lib/schemas";
 import {
   api,
@@ -57,6 +58,7 @@ import {
   dayLabel,
   errorMessage,
   localInput,
+  moveEventStart,
   requestId,
   shanghaiDay,
   shiftDay,
@@ -304,28 +306,50 @@ function AuthModal({
 
 function EventEditor({
   event,
+  latestEvent,
   day,
   close,
   save,
   busy,
+  storageKey,
 }: {
   event?: ScheduleEvent;
+  latestEvent?: ScheduleEvent;
   day: string;
   close: () => void;
-  save: (draft: EventDraft, status?: ScheduleEvent["status"]) => Promise<void>;
+  save: (draft: EventDraft, baseVersion: number) => Promise<void>;
   busy: boolean;
+  storageKey: string;
 }) {
-  const [title, setTitle] = useState(event?.title || "");
+  const [restored] = useState(() => loadEditorDraft(storageKey));
+  const [baseVersion, setBaseVersion] = useState(restored?.baseVersion ?? event?.version ?? 0);
+  const latest = latestEvent ?? event;
+  const stale = !!latest && baseVersion !== latest.version;
+  const [title, setTitle] = useState(restored?.title ?? event?.title ?? "");
   const [start, setStart] = useState(
-    event ? localInput(event.start_at) : `${day}T09:00`,
+    restored?.start ?? (event ? localInput(event.start_at) : `${day}T09:00`),
   );
   const [end, setEnd] = useState(
-    event ? localInput(event.end_at) : `${day}T10:00`,
+    restored?.end ?? (event ? localInput(event.end_at) : `${day}T10:00`),
   );
   const [error, setError] = useState("");
+  const [draftStored, setDraftStored] = useState(true);
+  useEffect(() => {
+    const changed = stale || title !== (latest?.title ?? "") ||
+      start !== (latest ? localInput(latest.start_at) : `${day}T09:00`) ||
+      end !== (latest ? localInput(latest.end_at) : `${day}T10:00`);
+    setDraftStored(saveLocalDraft(storageKey, changed ? { title, start, end, baseVersion } : null));
+  }, [title, start, end, storageKey, latest, day, baseVersion, stale]);
   async function submit(e: FormEvent) {
     e.preventDefault();
+    await saveDraft(baseVersion);
+  }
+  async function saveDraft(version: number) {
     setError("");
+    if (!title.trim()) {
+      setError("请填写日程标题。");
+      return;
+    }
     if (end <= start) {
       setError("结束时间需要晚于开始时间。");
       return;
@@ -338,7 +362,8 @@ function EventEditor({
         timezone: "Asia/Shanghai",
         time_source: "explicit",
         assumptions: [],
-      });
+      }, version);
+      saveLocalDraft(storageKey, null);
     } catch (error) {
       setError(errorMessage(error));
     }
@@ -346,7 +371,7 @@ function EventEditor({
   return (
     <Modal
       title={event ? "调整一下安排" : "手动添加日程"}
-      subtitle="时间采用上海时区（UTC+8），保存前会检查冲突。"
+      subtitle="关闭后可继续编辑。调整开始时间时，会保留原时长。"
       close={close}
     >
       <form className="form-stack" onSubmit={submit}>
@@ -365,7 +390,10 @@ function EventEditor({
           <input
             type="datetime-local"
             value={start}
-            onChange={(e) => setStart(e.target.value)}
+            onChange={(e) => {
+              setEnd(moveEventStart(start, end, e.target.value));
+              setStart(e.target.value);
+            }}
             required
           />
         </label>
@@ -378,16 +406,48 @@ function EventEditor({
             required
           />
         </label>
+        <p className="settings-note">
+          {!draftStored
+            ? "此设备暂时无法保留草稿，请勿刷新或关闭页面。"
+            : "输入自动保存在此设备，确认保存后同步。时间采用上海时区（UTC+8）。"}
+        </p>
+        {stale && latest && (
+          <div className="inline-info editor-conflict" role="status">
+            <strong>另一端已更新这项日程，你的编辑草稿仍然保留。</strong>
+            <p>另一端：{latest.title}<br />
+              {localInput(latest.start_at).replace("T", " ")} — {localInput(latest.end_at).replace("T", " ")}<br />
+              {latest.status === "completed" ? "已完成" : "待进行"}
+            </p>
+            <div className="modal-actions">
+              <button type="button" className="secondary-button" disabled={busy} onClick={() => {
+                setTitle(latest.title);
+                setStart(localInput(latest.start_at));
+                setEnd(localInput(latest.end_at));
+                setBaseVersion(latest.version);
+                setError("");
+              }}>使用另一端版本</button>
+              <button type="button" className="primary-button" disabled={busy} onClick={() => {
+                // Rebase only after the user has seen and explicitly accepted
+                // the current remote version. Reopening a draft never rebases.
+                setBaseVersion(latest.version);
+                void saveDraft(latest.version);
+              }}>保留我的修改并保存</button>
+            </div>
+          </div>
+        )}
         {error && (
           <div role="alert" className="inline-error">
             {error}
           </div>
         )}
         <div className="modal-actions">
-          <button type="button" className="secondary-button" onClick={close}>
-            取消
+          <button type="button" className="secondary-button" disabled={busy} onClick={() => {
+            saveLocalDraft(storageKey, null);
+            close();
+          }}>
+            放弃编辑
           </button>
-          <button className="primary-button" disabled={busy}>
+          <button className="primary-button" disabled={busy || stale}>
             {busy ? (
               <LoaderCircle className="spin" size={16} />
             ) : (
@@ -440,9 +500,14 @@ export default function Dashboard({ initialDay }: { initialDay: string }) {
   const actionLock = useRef(false);
   const userRef = useRef<string | null>(null);
   const modelVersion = useRef(0);
+  const sessionRetry = useRef(false);
+  const sessionRequest = useRef<Promise<void> | null>(null);
+  const refreshing = useRef<{ key: string; request: number } | null>(null);
   const userId = session.user?.id;
   const draftKey = `shunshoupai-draft-${userId || "guest"}`;
   const pendingKey = `shunshoupai-pending-${userId || "guest"}`;
+  const reviewKey = `shunshoupai-review-${userId || "guest"}`;
+  const editorKey = `shunshoupai-editor-${userId || "guest"}-${editor && editor !== "new" ? editor.id : "new"}`;
   const closeAuth = useCallback(() => setAuthOpen(false), []);
   const closeSettings = useCallback(() => setSettingsOpen(false), []);
   const closeModelSettings = useCallback(() => setModelSettingsOpen(false), []);
@@ -493,10 +558,43 @@ export default function Dashboard({ initialDay }: { initialDay: string }) {
     }
   }, [userId]);
 
+  const restoreSession = useCallback(() => {
+    if (sessionRequest.current) return sessionRequest.current;
+    const epoch = authEpoch.current;
+    const request = bootstrapSession()
+      .then((data) => {
+        if (epoch !== authEpoch.current) return;
+        sessionRetry.current = false;
+        userRef.current = data.user?.id || null;
+        setSession(data);
+        setSyncError("");
+        if (data.pairing_limited) setNotice({ kind: "info", text: `扫码临时授权有效至 ${data.session_expires_at || "当前会话到期"}；到期后重新扫码或密码登录。` });
+      })
+      .catch((error) => {
+        if (epoch !== authEpoch.current) return;
+        sessionRetry.current = true;
+        setSyncError(errorMessage(error));
+      })
+      .finally(() => {
+        sessionRequest.current = null;
+        setReady(true);
+      });
+    sessionRequest.current = request;
+    return request;
+  }, []);
+
   const refresh = useCallback(
     async (quiet = false) => {
-      if (!userId) return;
+      if (!userId) {
+        if (sessionRetry.current) await restoreSession();
+        return;
+      }
+      const key = `${userId}:${selectedDay}`;
+      // A slow connection must be allowed to finish; polling every eight
+      // seconds used to invalidate every result when a response took longer.
+      if (quiet && (refreshing.current?.key === key || actionLock.current)) return;
       const requestNumber = ++sequence.current;
+      refreshing.current = { key, request: requestNumber };
       if (!quiet) setSyncing(true);
       try {
         const from = `${shiftDay(selectedDay, -35)}T00:00:00+08:00`;
@@ -522,27 +620,17 @@ export default function Dashboard({ initialDay }: { initialDay: string }) {
           setNotice({ kind: "info", text: "登录已过期，请重新登录后继续。" });
         }
       } finally {
+        if (refreshing.current?.request === requestNumber) refreshing.current = null;
         if (requestNumber === sequence.current) setSyncing(false);
       }
     },
-    [selectedDay, userId, refreshModelSettings],
+    [selectedDay, userId, refreshModelSettings, restoreSession],
   );
 
   useEffect(() => {
-    const epoch = authEpoch.current;
-    bootstrapSession()
-      .then((data) => {
-        if (epoch !== authEpoch.current) return;
-        userRef.current = data.user?.id || null;
-        setSession(data);
-          if (data.pairing_limited) setNotice({ kind: "info", text: `扫码临时授权有效至 ${data.session_expires_at || "当前会话到期"}；到期后重新扫码或密码登录。` });
-      })
-      .catch((error) => {
-        if (epoch === authEpoch.current) setSyncError(errorMessage(error));
-      })
-      .finally(() => setReady(true));
+    void restoreSession();
     setOnline(navigator.onLine);
-  }, []);
+  }, [restoreSession]);
   useEffect(() => {
     if (ready) document.documentElement.setAttribute("data-shunshoupai-ready", "true");
     return () => { document.documentElement.removeAttribute("data-shunshoupai-ready"); };
@@ -563,7 +651,10 @@ export default function Dashboard({ initialDay }: { initialDay: string }) {
     setModelSettings(null);
     modelVersion.current = 0;
     setModelSettingsOpen(false);
+    setEditor(null);
+    setDeleteEvent(null);
     if (userId) {
+      setParseResult(loadReviewDraft(reviewKey));
       try {
         const savedText =
           localStorage.getItem(draftKey) ||
@@ -603,7 +694,7 @@ export default function Dashboard({ initialDay }: { initialDay: string }) {
     }
     // Session changes reset account-scoped data; provider is configuration, not an account boundary.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [userId, draftKey, pendingKey]);
+  }, [userId, draftKey, pendingKey, reviewKey]);
   useEffect(() => {
     void refresh();
     function regain() {
@@ -677,6 +768,10 @@ export default function Dashboard({ initialDay }: { initialDay: string }) {
       /* input stays in state */
     }
   }
+  function updateReviewDraft(result: ParseResult | null) {
+    setParseResult(result);
+    saveLocalDraft(reviewKey, result);
+  }
   function requireAuth() {
     if (userId) return true;
     setAuthOpen(true);
@@ -684,6 +779,7 @@ export default function Dashboard({ initialDay }: { initialDay: string }) {
   }
   function onLogin(data: SessionInfo) {
     authEpoch.current++;
+    sessionRetry.current = false;
     userRef.current = data.user?.id || null;
     setSession(data);
     setNotice({ kind: "success", text: "登录成功，接着安排你的生活吧。" });
@@ -693,6 +789,7 @@ export default function Dashboard({ initialDay }: { initialDay: string }) {
     try {
       await api("/api/auth/logout", { method: "POST", body: "{}" });
       authEpoch.current++;
+      sessionRetry.current = false;
       userRef.current = null;
       sequence.current++;
       setSession((s) => ({ ...s, user: null }));
@@ -723,7 +820,6 @@ export default function Dashboard({ initialDay }: { initialDay: string }) {
     const epoch = authEpoch.current;
     setParsing(true);
     setParseError("");
-    setParseResult(null);
     setCommitError("");
     try {
       const result = await api<ParseResult>("/api/ai/parse", {
@@ -731,7 +827,7 @@ export default function Dashboard({ initialDay }: { initialDay: string }) {
         body: JSON.stringify({ text, timezone: "Asia/Shanghai" }),
       });
       if (epoch !== authEpoch.current) return;
-      setParseResult(result);
+      updateReviewDraft(result);
       setPending(null);
       setUncertain(false);
     } catch (error) {
@@ -741,8 +837,8 @@ export default function Dashboard({ initialDay }: { initialDay: string }) {
     }
   }
   function editDraft(index: number, field: keyof EventDraft, value: string) {
-    if (uncertain || !parseResult) return;
-    setParseResult({
+    if (uncertain || parsing || !parseResult) return;
+    updateReviewDraft({
       ...parseResult,
       events: parseResult.events.map((event, i) =>
         i === index
@@ -767,7 +863,7 @@ export default function Dashboard({ initialDay }: { initialDay: string }) {
     );
   }
   async function commitDrafts() {
-    if (!parseResult?.events.length || actionLock.current || !requireAuth())
+    if (parsing || !parseResult?.events.length || actionLock.current || !requireAuth())
       return;
     if (!online) {
       setCommitError(
@@ -801,7 +897,7 @@ export default function Dashboard({ initialDay }: { initialDay: string }) {
       if (epoch !== authEpoch.current) return;
       setUncertain(false);
       setPending(null);
-      setParseResult(null);
+      updateReviewDraft(null);
       updateText("");
       try {
         localStorage.removeItem(pendingKey);
@@ -847,7 +943,7 @@ export default function Dashboard({ initialDay }: { initialDay: string }) {
       setSaving(false);
     }
   }
-  async function saveEditor(draft: EventDraft) {
+  async function saveEditor(draft: EventDraft, baseVersion: number) {
     if (actionLock.current) return;
     if (!online) throw new Error("离线");
     const epoch = authEpoch.current;
@@ -858,7 +954,7 @@ export default function Dashboard({ initialDay }: { initialDay: string }) {
         await api(`/api/events/${editor.id}`, {
           method: "PATCH",
           body: JSON.stringify({
-            base_version: editor.version,
+            base_version: baseVersion,
             title: draft.title,
             start_local: draft.start_local,
             end_local: draft.end_local,
@@ -887,7 +983,7 @@ export default function Dashboard({ initialDay }: { initialDay: string }) {
           ) {
             setPending(payload);
             setUncertain(true);
-            setParseResult({
+            updateReviewDraft({
               events: payload.events,
               questions: [],
               warnings: [],
@@ -895,6 +991,7 @@ export default function Dashboard({ initialDay }: { initialDay: string }) {
               provider: "rules",
             });
             setCommitError("保存状态待确认，请使用「核实并重试」确认结果。");
+            saveLocalDraft(editorKey, null);
             setEditor(null);
           } else {
             try {
@@ -1236,6 +1333,14 @@ export default function Dashboard({ initialDay }: { initialDay: string }) {
                 <Plus size={17} />
                 手动添加
               </button>
+              <button className="secondary-button quick-compose" onClick={() => {
+                const input = document.getElementById("schedule-input");
+                input?.focus({ preventScroll: true });
+                input?.scrollIntoView({ block: "center" });
+              }}>
+                <Sparkles size={17} />
+                一句话安排
+              </button>
             </div>
           </section>
           {(!online || syncError) && (
@@ -1298,6 +1403,7 @@ export default function Dashboard({ initialDay }: { initialDay: string }) {
                 </div>
                 <div className={`input-area ${parsing ? "is-parsing" : ""}`}>
                   <textarea
+                    id="schedule-input"
                     aria-label="描述你的日程安排"
                     placeholder={
                       "比如：明天下午三点到四点面试，\n今天晚上七点到八点改简历……"
@@ -1407,7 +1513,7 @@ export default function Dashboard({ initialDay }: { initialDay: string }) {
                           aria-label={`草稿 ${index + 1} 标题`}
                           value={draft.title}
                           maxLength={100}
-                          disabled={uncertain || saving}
+                          disabled={uncertain || saving || parsing}
                           onChange={(e) =>
                             editDraft(index, "title", e.target.value)
                           }
@@ -1415,9 +1521,9 @@ export default function Dashboard({ initialDay }: { initialDay: string }) {
                         <button
                           aria-label={`移除草稿 ${index + 1}`}
                           className="icon-button"
-                          disabled={uncertain || saving}
+                          disabled={uncertain || saving || parsing}
                           onClick={() => {
-                            setParseResult({
+                            updateReviewDraft({
                               ...parseResult,
                               events: parseResult.events.filter(
                                 (_, i) => i !== index,
@@ -1436,7 +1542,7 @@ export default function Dashboard({ initialDay }: { initialDay: string }) {
                             type="datetime-local"
                             aria-label={`草稿 ${index + 1} 开始时间`}
                             value={draft.start_local.slice(0, 16)}
-                            disabled={uncertain || saving}
+                            disabled={uncertain || saving || parsing}
                             onChange={(e) =>
                               editDraft(index, "start_local", e.target.value)
                             }
@@ -1449,7 +1555,7 @@ export default function Dashboard({ initialDay }: { initialDay: string }) {
                             type="datetime-local"
                             aria-label={`草稿 ${index + 1} 结束时间`}
                             value={draft.end_local.slice(0, 16)}
-                            disabled={uncertain || saving}
+                            disabled={uncertain || saving || parsing}
                             onChange={(e) =>
                               editDraft(index, "end_local", e.target.value)
                             }
@@ -1478,9 +1584,9 @@ export default function Dashboard({ initialDay }: { initialDay: string }) {
                     <div className="draft-actions">
                       <button
                         className="text-button"
-                        disabled={uncertain || saving}
+                        disabled={uncertain || saving || parsing}
                         onClick={() => {
-                          setParseResult(null);
+                          updateReviewDraft(null);
                           setPending(null);
                           setCommitError("");
                         }}
@@ -1491,6 +1597,7 @@ export default function Dashboard({ initialDay }: { initialDay: string }) {
                         className="primary-button"
                         disabled={
                           saving ||
+                          parsing ||
                           (parseResult.needs_clarification && !uncertain)
                         }
                         onClick={() => void commitDrafts()}
@@ -1858,11 +1965,14 @@ export default function Dashboard({ initialDay }: { initialDay: string }) {
       )}
       {editor && (
         <EventEditor
+          key={editorKey}
           event={editor === "new" ? undefined : editor}
+          latestEvent={editor === "new" ? undefined : events.find(event => event.id === editor.id)}
           day={selectedDay}
           close={closeEditor}
           save={saveEditor}
           busy={saving}
+          storageKey={editorKey}
         />
       )}
       {deleteEvent && (

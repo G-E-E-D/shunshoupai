@@ -3,6 +3,15 @@ import type { AuthContext } from "./auth";
 import { databaseError, AppError } from "./errors";
 import { localStore } from "./local-store";
 
+export async function getEvent(auth: AuthContext, id: string): Promise<ScheduleEvent> {
+  if (!auth.supabase) return localStore().event(auth.user.id, id);
+  const { data, error } = await auth.supabase.from("events").select("id,title,start_at,end_at,timezone,status,version,created_at,updated_at,deleted_at")
+    .eq("user_id", auth.user.id).eq("id", id).maybeSingle();
+  if (error) databaseError(error);
+  if (!data) throw new AppError("NOT_FOUND", "日程不存在或已删除。", 404);
+  return data as ScheduleEvent;
+}
+
 export async function listEvents(auth: AuthContext, from: string, to: string): Promise<ScheduleEvent[]> {
   if (!auth.supabase) return localStore().list(auth.user.id, from, to);
   const { data, error } = await auth.supabase.from("events").select("id,title,start_at,end_at,timezone,status,version,created_at,updated_at,deleted_at")

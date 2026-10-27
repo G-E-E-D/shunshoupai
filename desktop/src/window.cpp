@@ -3,6 +3,7 @@
 #include "modern_calendar.h"
 #include "qrcodegen.hpp"
 #include "connection.h"
+#include "draft_state.h"
 #include <QApplication>
 #include <QCheckBox>
 #include <QButtonGroup>
@@ -30,6 +31,7 @@
 #include <QPushButton>
 #include <QResizeEvent>
 #include <QSignalBlocker>
+#include <QShortcut>
 #include <QScrollArea>
 #include <QSpinBox>
 #include <QSplitter>
@@ -90,7 +92,7 @@ QDateTime localTime(const QString &value) {
     return QDateTime::fromString(value, Qt::ISODate).toTimeZone(QTimeZone("Asia/Shanghai"));
 }
 QString pendingKey(const QString &origin, const QString &owner) {
-    return "pending/" + QString::fromLatin1(QCryptographicHash::hash((origin + owner).toUtf8(), QCryptographicHash::Sha256).toHex());
+    return DraftState::key("pending", origin, owner);
 }
 void clearLayout(QLayout *layout) {
     while (auto *item = layout->takeAt(0)) {
@@ -101,7 +103,7 @@ void clearLayout(QLayout *layout) {
 }
 }
 
-MainWindow::MainWindow(const QString &origin) : api(origin) {
+MainWindow::MainWindow(const QString &origin, bool rememberSession) : api(origin, rememberSession) {
     setWindowTitle(trText("顺手排 · 我的日程"));
     resize(1320, 880);
     setMinimumSize(1060, 720);
@@ -176,6 +178,8 @@ MainWindow::MainWindow(const QString &origin) : api(origin) {
     side->addWidget(sideNote);
     side->addStretch();
     auto *reminder = new QCheckBox(trText("前台开始提醒"));
+    reminders = settings.value("preferences/reminders", false).toBool();
+    reminder->setChecked(reminders);
     side->addWidget(reminder);
     side->addWidget(label(trText("开始前 5 分钟提醒，应用保持打开时生效。"), "fieldHint"));
     auto *accountSummary = new AccountSummary;
@@ -204,13 +208,14 @@ MainWindow::MainWindow(const QString &origin) : api(origin) {
     toolbar->addStretch();
     view = new QComboBox(this);
     view->addItems({trText("当天"), trText("七天"), trText("已完成")});
+    view->setCurrentIndex(qBound(0, settings.value("preferences/view", 0).toInt(), 2));
     view->hide();
     auto *segments = new QFrame; segments->setObjectName("segmentedBar");
     auto *segmentLayout = new QHBoxLayout(segments); segmentLayout->setContentsMargins(4, 4, 4, 4); segmentLayout->setSpacing(0);
     auto *group = new QButtonGroup(this); group->setExclusive(true);
     for (int i = 0; i < 3; ++i) {
         auto *choice = button(QStringList{trText("日程"), trText("七天"), trText("已完成")}[i]);
-        choice->setObjectName("segmentButton"); choice->setCheckable(true); choice->setChecked(i == 0); group->addButton(choice, i);
+        choice->setObjectName("segmentButton"); choice->setCheckable(true); choice->setChecked(i == view->currentIndex()); group->addButton(choice, i);
         segmentLayout->addWidget(choice);
         connect(choice, &QPushButton::clicked, this, [this, i] { view->setCurrentIndex(i); });
     }
@@ -231,8 +236,11 @@ MainWindow::MainWindow(const QString &origin) : api(origin) {
     composeActions->addStretch();
     auto *parseButton = button(trText("整理日程"), nullptr, true);
     parseButton->setIcon(Design::icon("sparkle", Qt::white)); parseButton->setMinimumWidth(138);
+    parseButton->setToolTip(trText("整理日程（Ctrl+Enter）"));
     auto *example = button(trText("试试示例")); example->setObjectName("textButton");
     auto *resume = button(trText("恢复待确认保存")); resume->setObjectName("textButton");
+    resumeButton = resume;
+    resume->hide();
     composeActions->addWidget(parseButton); composeActions->addWidget(example); composeActions->addWidget(resume);
     composeRow->addLayout(composeActions);
     content->addWidget(composeCard);
@@ -259,9 +267,15 @@ MainWindow::MainWindow(const QString &origin) : api(origin) {
     connect(service, &QPushButton::clicked, this, &MainWindow::connection);
     connect(create, &QPushButton::clicked, this, [this] { editEvent(); });
     connect(parseButton, &QPushButton::clicked, this, &MainWindow::parse);
+    auto *quickParse = new QShortcut(QKeySequence(Qt::CTRL | Qt::Key_Return), composer);
+    quickParse->setContext(Qt::WidgetShortcut);
+    connect(quickParse, &QShortcut::activated, parseButton, &QPushButton::click);
+    connect(composer, &QTextEdit::textChanged, this, [this] {
+        if (!owner().isEmpty()) settings.setValue("composer/" + pendingKey(api.origin, owner()), composer->toPlainText());
+    });
     connect(example, &QPushButton::clicked, this, [this] { composer->setPlainText(trText("明天下午三点到四点面试，今天晚上七点到八点改简历，八点到九点准备面试。")); });
     connect(resume, &QPushButton::clicked, this, &MainWindow::restorePending);
-    connect(reminder, &QCheckBox::toggled, this, [this](bool enabled) { reminders = enabled; });
+    connect(reminder, &QCheckBox::toggled, this, [this](bool enabled) { reminders = enabled; settings.setValue("preferences/reminders", enabled); });
     connect(reload, &QPushButton::clicked, this, &MainWindow::refresh);
     connect(todayButton, &QPushButton::clicked, this, [this] { day->setDate(QDateTime::currentDateTimeUtc().toTimeZone(zone).date()); });
     connect(previous, &QPushButton::clicked, this, [this] { day->setDate(day->date().addDays(-1)); });
@@ -274,7 +288,9 @@ MainWindow::MainWindow(const QString &origin) : api(origin) {
         refresh();
     });
     dateHeading->setText(day->date().toString(trText("yyyy年M月")));
-    connect(view, &QComboBox::currentIndexChanged, this, [this, group](int index) { group->button(index)->setChecked(true); refresh(); });
+    connect(view, &QComboBox::currentIndexChanged, this, [this, group](int index) {
+        group->button(index)->setChecked(true); settings.setValue("preferences/view", index); renderEvents(); refresh();
+    });
     connect(search, &QLineEdit::textChanged, this, [this] { renderEvents(); });
     poll = new QTimer(this); poll->setInterval(8000);
     connect(poll, &QTimer::timeout, this, [this] { if (!api.busy() && isActiveWindow() && !QApplication::activeModalWidget()) refresh(); });
@@ -293,23 +309,34 @@ void MainWindow::setSession(const QJsonObject &data) {
     const auto previousOwner = owner();
     const bool changed = owner() != data.value("user").toObject().value("id").toString();
     session = data;
+    sessionChecked = true;
     static_cast<AccountSummary *>(accountLabel)->setFullText(owner().isEmpty() ? trText("登录后与手机同步") : data.value("user").toObject().value("email").toString());
     accountButton->setText(owner().isEmpty() ? trText("登录 / 注册") : trText("退出账号"));
     modelButton->setEnabled(!owner().isEmpty());
     phoneButton->setEnabled(!owner().isEmpty());
     modeLabel->setText(data.value("ai_provider").toString() == "model" ? trText("模型整理") : trText("规则体验"));
-    if (changed) { events = {}; reminded.clear(); if (!previousOwner.isEmpty()) composer->clear(); }
+    if (changed) {
+        events = {}; reminded.clear();
+        const QSignalBlocker blocked(composer);
+        if (!previousOwner.isEmpty()) composer->clear();
+        if (!owner().isEmpty() && composer->toPlainText().isEmpty())
+            composer->setPlainText(settings.value("composer/" + pendingKey(api.origin, owner())).toString());
+        if (!owner().isEmpty()) settings.setValue("composer/" + pendingKey(api.origin, owner()), composer->toPlainText());
+    }
     renderEvents();
 }
 void MainWindow::initialize() {
     const auto result = api.call("GET", "/api/auth/session");
-    if (!result.ok()) { status->setText(trText("未连接：") + result.error); return; }
+    if (!result.ok()) { sessionChecked = false; status->setText(trText("暂时未连接，恢复后会自动重试。")); return; }
+    if (result.data.value("user").toObject().isEmpty()) api.forgetSession();
     setSession(result.data);
     status->setText(trText("服务已就绪 · ") + api.origin);
     refresh();
 }
 void MainWindow::refresh() {
     if (api.busy()) return;
+    updateRecoveryButton();
+    if (!sessionChecked) { initialize(); return; }
     const auto today = QDateTime::currentDateTimeUtc().toTimeZone(zone).date();
     if (today != currentDay) {
         const bool followsToday = day->date() == currentDay;
@@ -327,11 +354,12 @@ void MainWindow::refresh() {
     const auto result = api.call("GET", "/api/events" + query);
     if (!result.ok()) {
         status->setText(trText("同步失败：") + result.error);
-        if (result.status == 401) { setSession({}); status->setText(trText("登录已过期，请重新登录。")); }
+        if (result.status == 401) { api.forgetSession(); setSession({}); status->setText(trText("登录已过期，请重新登录。你的草稿已保留。")); }
         return;
     }
-    events = result.data.value("events").toArray();
-    renderEvents();
+    const auto freshEvents = result.data.value("events").toArray();
+    // An unchanged poll must not recreate focused controls or move the scroll.
+    if (freshEvents != events) { events = freshEvents; renderEvents(); }
     status->setText(trText("已同步 · ") + QTime::currentTime().toString("HH:mm:ss") + " · " + api.origin);
     for (const auto &value : events) {
         const auto event = value.toObject();
@@ -345,6 +373,7 @@ void MainWindow::refresh() {
     }
 }
 void MainWindow::renderEvents() {
+    updateRecoveryButton();
     clearLayout(agenda);
     int count = 0;
     QDate lastGroup;
@@ -417,7 +446,8 @@ void MainWindow::parse() {
     if (composer->toPlainText().trimmed().isEmpty() || composer->toPlainText().size() > 2000) {
         QMessageBox::information(this, trText("写下你的安排"), trText("请填写 1–2000 字的日程描述。")); return;
     }
-    if (!settings.value(pendingKey(api.origin, owner())).toString().isEmpty()) {
+    if (!settings.value(pendingKey(api.origin, owner())).toString().isEmpty()
+        || !DraftState::read(settings, DraftState::key("review", api.origin, owner())).isEmpty()) {
         restorePending(); return;
     }
     status->setText(trText("正在整理，请稍候…"));
@@ -432,9 +462,32 @@ void MainWindow::parse() {
 }
 void MainWindow::restorePending() {
     if (owner().isEmpty()) return;
-    const auto pending = QJsonDocument::fromJson(settings.value(pendingKey(api.origin, owner())).toString().toUtf8()).object();
-    if (!pending.isEmpty()) drafts(pending.value("events").toArray(), pending.value("request_id").toString());
-    else status->setText(trText("没有待确认的保存。"));
+    const auto pending = DraftState::read(settings, pendingKey(api.origin, owner()));
+    if (!pending.isEmpty()) { drafts(pending.value("events").toArray(), pending.value("request_id").toString()); return; }
+    const auto review = DraftState::read(settings, DraftState::key("review", api.origin, owner()));
+    if (!review.isEmpty()) { drafts(review.value("events").toArray()); return; }
+    const auto prefix = DraftState::key("editor", api.origin, owner()) + "/";
+    for (const auto &key : settings.allKeys()) {
+        if (!key.startsWith(prefix)) continue;
+        const auto saved = DraftState::read(settings, key);
+        if (!saved.isEmpty()) { editEvent(saved.value("event").toObject()); return; }
+    }
+    status->setText(trText("没有尚未完成的草稿。"));
+}
+void MainWindow::updateRecoveryButton() {
+    QString caption;
+    if (!owner().isEmpty()) {
+        if (!settings.value(pendingKey(api.origin, owner())).toString().isEmpty()) caption = trText("确认上次保存结果");
+        else if (!DraftState::read(settings, DraftState::key("review", api.origin, owner())).isEmpty()) caption = trText("继续未提交草稿");
+        else {
+            const auto prefix = DraftState::key("editor", api.origin, owner()) + "/";
+            for (const auto &key : settings.allKeys()) {
+                if (key.startsWith(prefix) && !DraftState::read(settings, key).isEmpty()) { caption = trText("继续编辑日程"); break; }
+            }
+        }
+    }
+    resumeButton->setVisible(!caption.isEmpty());
+    if (!caption.isEmpty()) resumeButton->setText(caption);
 }
 int MainWindow::smokeTest(const QString &screenshot) {
     // This exercises the real API and renders this native QWidget tree. It does

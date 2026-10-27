@@ -10,14 +10,16 @@
 #include <QPalette>
 #include <QSettings>
 #include <QThread>
+#include <QTemporaryDir>
 #include <QTimer>
+#include <memory>
 
 int main(int argc, char **argv) {
     QApplication app(argc, argv);
     Design::apply(app);
     QCoreApplication::setOrganizationName("G-E-E-D");
     QCoreApplication::setApplicationName("Shunshoupai");
-    QCoreApplication::setApplicationVersion("1.3.0");
+    QCoreApplication::setApplicationVersion(QStringLiteral(SHUNSHOUPAI_VERSION));
     QCommandLineParser parser;
     parser.setApplicationDescription(QString::fromUtf8("顺手排 · 原生 C++ / Qt 桌面客户端"));
     parser.addHelpOption(); parser.addVersionOption();
@@ -28,6 +30,13 @@ int main(int argc, char **argv) {
     parser.process(app);
     const bool smoke = parser.isSet("smoke-test") || parser.isSet("visual-smoke");
     if (smoke && !parser.isSet("backend")) return 4;
+    std::unique_ptr<QTemporaryDir> smokeSettings;
+    if (smoke) {
+        smokeSettings = std::make_unique<QTemporaryDir>();
+        if (!smokeSettings->isValid()) return 5;
+        QSettings::setDefaultFormat(QSettings::IniFormat);
+        QSettings::setPath(QSettings::IniFormat, QSettings::UserScope, smokeSettings->path());
+    }
     QDir().mkpath(appDataDirectory());
     QLockFile lock(appDataDirectory() + "/desktop.lock");
     if (!smoke && !lock.tryLock(50)) {
@@ -54,7 +63,7 @@ int main(int argc, char **argv) {
     try { validated = QUrl(QString::fromStdString(shunshoupai::parseConnection(origin.toStdString(), false).origin)); }
     catch (const std::invalid_argument &) { return 3; }
     validated.setPath("");
-    MainWindow window(validated.toString());
+    MainWindow window(validated.toString(), !smoke);
     if (parser.isSet("visual-smoke")) return window.visualSmoke(parser.value("visual-smoke"));
     if (smoke) {
         if (!parser.isSet("backend")) return 4;

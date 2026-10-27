@@ -3755,3 +3755,26 @@ h1 { font-weight: 500; font-size: 30px; letter-spacing: -.5px; }
   .model-actions > button { padding-inline: 10px; font-size: 12px; }
   .footer-mode { font-size: 9px; }
 }
+
+/* Leave room for fingers and gesture navigation on the mobile workbench. */
+.quick-compose { display: none; }
+.editor-conflict { display: block; }
+.editor-conflict p { margin-top: 10px; }
+.editor-conflict .modal-actions { flex-wrap: wrap; }
+.editor-conflict button { flex: 1 1 140px; }
+@media (max-width: 680px) {
+  .quick-compose { display: inline-flex; min-height: 44px; }
+  .dashboard-grid .agenda-column,
+  .dashboard-grid:has(.draft-section) .agenda-column { grid-row: 1; }
+  .dashboard-grid .composer-card { grid-row: 2; }
+  .dashboard-grid .draft-section { grid-row: 3; }
+  .complete-button,
+  .event-row-actions .icon-button,
+  .modal-close,
+  .date-actions > .icon-button {
+    min-width: 44px;
+    min-height: 44px;
+  }
+  main { padding-bottom: max(28px, env(safe-area-inset-bottom)); }
+  .modal-backdrop { padding-bottom: max(16px, env(safe-area-inset-bottom)); }
+}

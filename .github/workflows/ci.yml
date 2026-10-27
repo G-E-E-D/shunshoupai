@@ -40,6 +40,7 @@ jobs:
           docker exec -i ${{ job.services.postgres.id }} psql -U postgres -v ON_ERROR_STOP=1 < supabase/tests/invariants.sql
           docker exec -i ${{ job.services.postgres.id }} psql -U postgres -v ON_ERROR_STOP=1 < supabase/tests/model-settings.sql
           docker exec -i ${{ job.services.postgres.id }} psql -U postgres -v ON_ERROR_STOP=1 < supabase/tests/pairing.sql
+          docker exec -i ${{ job.services.postgres.id }} psql -U postgres -v ON_ERROR_STOP=1 < supabase/tests/sync.sql
 
   check:
     runs-on: ubuntu-24.04

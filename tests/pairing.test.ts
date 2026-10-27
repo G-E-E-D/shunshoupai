@@ -63,7 +63,7 @@ test("source logout, expiry, malformed tokens and expired tickets fail without c
   store.deleteSession(source);
   assert.throws(() => store.redeemPairing(ticket.token, now + 1000), isCode("PAIRING_INVALID"));
   const replacement = store.createSession(user.id);
-  assert.throws(() => store.issuePairing(user.id, replacement, now + 8 * 24 * 60 * 60 * 1000), isCode("UNAUTHORIZED"));
+  assert.throws(() => store.issuePairing(user.id, replacement, now + 31 * 24 * 60 * 60 * 1000), isCode("UNAUTHORIZED"));
 }));
 
 test("regenerating invalidates only unused tickets from that source browser", () => withStore(store => {

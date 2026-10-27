@@ -44,8 +44,16 @@ adb shell wm dismiss-keyguard
 adb logcat -c
 
 if [ "${HAS_SIGNED_RELEASE:-false}" = 'true' ]; then
+  : "${RELEASE_APK_NAME:?CI must provide the APK name exported by Gradle}"
+  : "${EXPECTED_VERSION_NAME:?CI must provide the Gradle versionName}"
+  : "${EXPECTED_VERSION_CODE:?CI must provide the Gradle versionCode}"
+  test -f "release/$RELEASE_APK_NAME"
+  (cd release && sha256sum --check SHA256SUMS.txt)
   adb logcat -c
-  adb install -r release/shunshoupai-android-v1.3.0.apk
+  adb install -r "release/$RELEASE_APK_NAME"
+  adb shell dumpsys package com.shunshoupai.app > "$report_dir/installed-package.txt"
+  sed 's/^[[:space:]]*//' "$report_dir/installed-package.txt" | tr -d '\r' | grep -Fx "versionName=$EXPECTED_VERSION_NAME"
+  sed 's/^[[:space:]]*//' "$report_dir/installed-package.txt" | tr -d '\r' | grep -E "^versionCode=$EXPECTED_VERSION_CODE([[:space:]]|$)"
   adb shell am start -W -n com.shunshoupai.app/.MainActivity | tee "$report_dir/launch.txt"
   grep -q 'Status: ok' "$report_dir/launch.txt"
   # Wait for the actual UI, rather than assuming every cold emulator has drawn
@@ -55,8 +63,8 @@ if [ "${HAS_SIGNED_RELEASE:-false}" = 'true' ]; then
     adb shell pidof com.shunshoupai.app
     adb shell uiautomator dump /sdcard/release-window.xml
     adb pull /sdcard/release-window.xml "$report_dir/window.xml"
-    if grep -q 'com.shunshoupai.app:id/server_url' "$report_dir/window.xml" \
-        && grep -q 'com.shunshoupai.app:id/connect_button' "$report_dir/window.xml"; then
+    if grep -q 'com.shunshoupai.app:id/offline_add' "$report_dir/window.xml" \
+        && grep -q 'com.shunshoupai.app:id/offline_connect' "$report_dir/window.xml"; then
       break
     fi
     if grep -Fq "Pixel Launcher isn't responding" "$report_dir/window.xml"; then
@@ -67,8 +75,8 @@ if [ "${HAS_SIGNED_RELEASE:-false}" = 'true' ]; then
     sleep 1
   done
   adb exec-out screencap -p > "$report_dir/screenshot.png"
-  grep -q 'com.shunshoupai.app:id/server_url' "$report_dir/window.xml"
-  grep -q 'com.shunshoupai.app:id/connect_button' "$report_dir/window.xml"
+  grep -q 'com.shunshoupai.app:id/offline_add' "$report_dir/window.xml"
+  grep -q 'com.shunshoupai.app:id/offline_connect' "$report_dir/window.xml"
   adb logcat -d -b crash > "$report_dir/crashes.txt"
   adb logcat -d -b events -v brief > "$report_dir/events.txt"
   if grep -q 'com.shunshoupai.app' "$report_dir/crashes.txt" \
@@ -89,3 +97,7 @@ fi
 # is best-effort and cannot turn failed business assertions into a success.
 adb pull /sdcard/Android/data/com.shunshoupai.app/files/android-workspace.png \
   "$report_dir/workspace.png" || true
+for capture in android-offline-home android-offline-editor android-offline-conflict; do
+  adb pull "/sdcard/Android/data/com.shunshoupai.app/files/$capture.png" \
+    "$report_dir/$capture.png" || true
+done

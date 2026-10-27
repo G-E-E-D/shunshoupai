@@ -64,6 +64,8 @@ public class ConnectionInstrumentedTest {
     public void clearOnlyTestAppState() {
         Context context = InstrumentationRegistry.getInstrumentation().getTargetContext();
         context.getSharedPreferences("connection", Context.MODE_PRIVATE).edit().clear().commit();
+        context.getSharedPreferences("offline-editor", Context.MODE_PRIVATE).edit().clear().commit();
+        context.deleteDatabase("schedule-offline.sqlite");
         InstrumentationRegistry.getInstrumentation().runOnMainSync(() -> {
             CookieManager.getInstance().removeAllCookies(null);
             WebStorage.getInstance().deleteAllData();
@@ -77,8 +79,11 @@ public class ConnectionInstrumentedTest {
     }
 
     @Test
-    public void firstLaunchRequiresAnExplicitServiceAndRejectsUnsafeUrls() {
+    public void firstLaunchWorksOfflineAndConnectionRejectsUnsafeUrls() {
         scenario = ActivityScenario.launch(MainActivity.class);
+        assertEquals(View.VISIBLE, read(a -> a.findViewById(R.id.offline_screen).getVisibility()).intValue());
+        assertTrue(read(a -> a.findViewById(R.id.offline_add).isEnabled()));
+        scenario.onActivity(activity -> activity.findViewById(R.id.offline_connect).performClick());
         assertEquals(View.VISIBLE, read(a -> a.findViewById(R.id.setup_screen).getVisibility()).intValue());
         assertEquals("", read(a -> ((EditText) a.findViewById(R.id.server_url)).getText().toString()));
 
@@ -123,6 +128,8 @@ public class ConnectionInstrumentedTest {
         });
 
         scenario.recreate();
+        assertEquals(View.VISIBLE, read(a -> a.findViewById(R.id.offline_screen).getVisibility()).intValue());
+        scenario.onActivity(activity -> activity.findViewById(R.id.offline_online).performClick());
         waitUntil("Saved address must survive Activity recreation", () -> "Fixture ready".equals(webTitle()));
         assertEquals(View.GONE, read(a -> a.findViewById(R.id.setup_screen).getVisibility()).intValue());
         Context context = InstrumentationRegistry.getInstrumentation().getTargetContext();
@@ -267,6 +274,7 @@ public class ConnectionInstrumentedTest {
         fixture = new HttpFixture();
         fixture.start();
         scenario = ActivityScenario.launch(MainActivity.class);
+        scenario.onActivity(activity -> activity.findViewById(R.id.offline_connect).performClick());
         scenario.onActivity(activity -> activity.handleScanResult("javascript:alert('not-a-service')"));
         assertEquals(View.VISIBLE, read(a -> a.findViewById(R.id.setup_screen).getVisibility()).intValue());
         Context context = InstrumentationRegistry.getInstrumentation().getTargetContext();
@@ -325,6 +333,14 @@ public class ConnectionInstrumentedTest {
         desktopCookie = desktopCookie.split(";", 2)[0];
         registration.disconnect();
 
+        String desktopEventId=UUID.randomUUID().toString();
+        JSONObject computerEvent=new JSONObject().put("title","电脑已有日程").put("start_local","2026-10-27T10:00:00").put("end_local","2026-10-27T11:00:00").put("timezone","Asia/Shanghai").put("status","planned");
+        syncRequest(root,desktopCookie,owner.getString("id"),new org.json.JSONArray().put(new JSONObject().put("mutation_id",UUID.randomUUID().toString()).put("id",desktopEventId).put("base_version",0).put("deleted",false).put("event",computerEvent)));
+        String phoneEventId;
+        try(LocalScheduleStore local=new LocalScheduleStore(InstrumentationRegistry.getInstrumentation().getTargetContext())) {
+            phoneEventId=local.save("guest",null,LocalScheduleStore.payload("手机离线先记的日程",java.time.LocalDateTime.of(2026,10,27,10,30),java.time.LocalDateTime.of(2026,10,27,11,30),"planned",false));
+        }
+
         HttpURLConnection issuing = (HttpURLConnection) new URL(root + "api/pairing/issue").openConnection();
         issuing.setRequestMethod("POST");
         issuing.setDoOutput(true);
@@ -345,6 +361,15 @@ public class ConnectionInstrumentedTest {
 
         scenario = ActivityScenario.launch(MainActivity.class);
         scenario.onActivity(activity -> activity.handleScanResult(root + "#pair=" + token));
+        awaitPairedHome(owner.getString("id"));
+        try(LocalScheduleStore local=new LocalScheduleStore(InstrumentationRegistry.getInstrumentation().getTargetContext())) {
+            java.util.List<JSONObject> merged=local.list(root+"|"+owner.getString("id"));
+            assertEquals("Both devices' overlapping but independent schedules must be retained",2,merged.size());
+            assertTrue(merged.stream().anyMatch(event->desktopEventId.equals(event.optString("id"))));
+            assertTrue(merged.stream().anyMatch(event->phoneEventId.equals(event.optString("id"))&&!event.optBoolean("dirty")));
+        }
+        org.json.JSONArray mergedServer=syncRequest(root,desktopCookie,owner.getString("id"),new org.json.JSONArray()).getJSONArray("events");
+        assertEquals("The independently authenticated desktop must see the phone's offline event",2,mergedServer.length());
         waitUntil("Scanning the QR should redeem it and show the authenticated workbench",
                 () -> "true".equals(evaluate("Boolean(document.querySelector('header button[aria-label=\"打开账号设置\"]'))")));
         evaluate("window.__androidPairingCheck=null; fetch('/api/auth/session',{cache:'no-store'}).then(r=>r.json()).then(value=>window.__androidPairingCheck=value)");
@@ -399,6 +424,7 @@ public class ConnectionInstrumentedTest {
         WebView original = read(a -> (WebView) a.findViewById(R.id.web_view));
         PairingGrant first = pairingGrant(root);
         scenario.onActivity(activity -> activity.handleScanResult(root + "#pair=" + first.token));
+        awaitPairedHome(first.owner);
         waitForAccount(first.owner);
         assertTrue("Scanning must reuse the original XML WebView compositor", original == read(a -> a.findViewById(R.id.web_view)));
         PairingGrant second = pairingGrant(root);
@@ -418,6 +444,7 @@ public class ConnectionInstrumentedTest {
             instrumentation.runOnMainSync(capture::finish);
         } finally { instrumentation.removeMonitor(cameraMonitor); }
         scenario.onActivity(activity -> activity.handleScanResult(root + "#pair=" + second.token));
+        awaitPairedHome(second.owner);
         waitForAccount(second.owner);
         scenario.moveToState(Lifecycle.State.CREATED);
         scenario.moveToState(Lifecycle.State.RESUMED);
@@ -433,6 +460,23 @@ public class ConnectionInstrumentedTest {
         waitUntil("The newly scanned account should replace the previous cookie and hydrate",
                 () -> "true".equals(evaluate("(function(){if(!window.__rescanFetching){window.__rescanFetching=true;fetch('/api/auth/session',{cache:'no-store'}).then(function(r){return r.json()}).then(function(s){window.__rescanOwner=s.user?s.user.id:'';window.__rescanFetching=false}).catch(function(){window.__rescanFetching=false})}return document.documentElement.getAttribute('data-shunshoupai-ready')==='true' && window.__rescanOwner===" + JSONObject.quote(owner) + "})()"))
                         && read(a -> a.findViewById(R.id.loading_progress).getVisibility()) != View.VISIBLE);
+    }
+
+    private void awaitPairedHome(String owner) {
+        waitUntil("QR login should bind the local account and return to the independent schedule",
+            () -> read(a -> ((OfflineScheduleView)a.findViewById(R.id.offline_screen)).scope().endsWith("|"+owner)
+                && a.findViewById(R.id.offline_screen).getVisibility()==View.VISIBLE));
+        scenario.onActivity(activity -> activity.findViewById(R.id.offline_online).performClick());
+    }
+
+    private JSONObject syncRequest(String root,String cookie,String account,org.json.JSONArray mutations)throws Exception {
+        HttpURLConnection request=(HttpURLConnection)new URL(root+"api/events/sync").openConnection();
+        request.setRequestMethod("POST");request.setDoOutput(true);request.setConnectTimeout(10000);request.setReadTimeout(10000);request.setRequestProperty("Content-Type","application/json");request.setRequestProperty("Cookie",cookie);
+        try {
+            try(java.io.OutputStream output=request.getOutputStream()){output.write(new JSONObject().put("account_id",account).put("mutations",mutations).toString().getBytes(StandardCharsets.UTF_8));}
+            assertEquals(200,request.getResponseCode());
+            try(BufferedReader reader=new BufferedReader(new InputStreamReader(request.getInputStream(),StandardCharsets.UTF_8))){StringBuilder body=new StringBuilder();for(String line;(line=reader.readLine())!=null;)body.append(line);return new JSONObject(body.toString());}
+        }finally{request.disconnect();}
     }
 
     private static final class PairingGrant {
@@ -474,6 +518,7 @@ public class ConnectionInstrumentedTest {
 
     private void connect(String origin) {
         scenario.onActivity(activity -> {
+            activity.findViewById(R.id.offline_connect).performClick();
             ((EditText) activity.findViewById(R.id.server_url)).setText(origin);
             activity.findViewById(R.id.connect_button).performClick();
         });
