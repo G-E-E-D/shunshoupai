@@ -1,5 +1,7 @@
 # 顺手排 · 把想法排进生活
 
+[![自动检查](https://github.com/G-E-E-D/shunshoupai/actions/workflows/ci.yml/badge.svg)](https://github.com/G-E-E-D/shunshoupai/actions/workflows/ci.yml)
+
 把一段安排整理成可编辑草稿，确认后保存，再用手机、电脑接着安排。
 
 [源码仓库](https://github.com/G-E-E-D/shunshoupai) · [图文教程](docs/tutorial.md) · [云端配置](docs/cloud-setup.md) · [验收记录](docs/acceptance.md) · [创作说明](docs/creation-note.md)

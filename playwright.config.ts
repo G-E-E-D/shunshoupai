@@ -13,7 +13,15 @@ export default defineConfig({
     trace: "retain-on-failure",
     screenshot: "only-on-failure",
   },
-  projects: [{ name: "chromium", use: { ...devices["Desktop Chrome"], channel: process.platform === "win32" ? "msedge" : undefined } }],
+  projects: [
+    {
+      name: "chromium",
+      use: {
+        ...devices["Desktop Chrome"],
+        channel: process.platform === "win32" ? "msedge" : undefined,
+      },
+    },
+  ],
   webServer: {
     command: "npm run dev -- --port 3001",
     url: "http://localhost:3001/api/auth/session",

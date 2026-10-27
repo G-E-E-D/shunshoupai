@@ -2,7 +2,9 @@ import type { NextConfig } from "next";
 import { networkInterfaces } from "node:os";
 
 const localAddresses = Object.values(networkInterfaces()).flatMap((entries) =>
-  (entries || []).filter((entry) => entry.family === "IPv4" && !entry.internal).map((entry) => entry.address),
+  (entries || [])
+    .filter((entry) => entry.family === "IPv4" && !entry.internal)
+    .map((entry) => entry.address),
 );
 
 const config: NextConfig = {
@@ -12,11 +14,16 @@ const config: NextConfig = {
   serverExternalPackages: ["node:sqlite"],
   poweredByHeader: false,
   async headers() {
-    return [{ source: "/:path*", headers: [
-      { key: "X-Content-Type-Options", value: "nosniff" },
-      { key: "Referrer-Policy", value: "same-origin" },
-      { key: "X-Frame-Options", value: "DENY" },
-    ] }];
+    return [
+      {
+        source: "/:path*",
+        headers: [
+          { key: "X-Content-Type-Options", value: "nosniff" },
+          { key: "Referrer-Policy", value: "same-origin" },
+          { key: "X-Frame-Options", value: "DENY" },
+        ],
+      },
+    ];
   },
 };
 export default config;
