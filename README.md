@@ -1,6 +1,7 @@
 # 顺手排 · 把想法排进生活
 
 [![自动检查](https://github.com/G-E-E-D/shunshoupai/actions/workflows/ci.yml/badge.svg)](https://github.com/G-E-E-D/shunshoupai/actions/workflows/ci.yml)
+[![Android APK](https://github.com/G-E-E-D/shunshoupai/actions/workflows/android.yml/badge.svg)](https://github.com/G-E-E-D/shunshoupai/actions/workflows/android.yml)
 
 把一段安排整理成可编辑草稿，确认后保存，再用手机、电脑接着安排。
 
@@ -10,9 +11,11 @@
 
 Android 8.0 及以上可安装安卓客户端，连接同一个日程服务并使用同一账号。它提供原生服务配置、返回、刷新和网络错误重试，日程界面与现有 Web 应用共用。
 
-[APK 发布页](https://github.com/G-E-E-D/shunshoupai/releases) · [安装、连接与构建说明](docs/android.md)
+[下载 v1.1.0 APK](https://github.com/G-E-E-D/shunshoupai/releases/download/v1.1.0/shunshoupai-android-v1.1.0.apk) · [v1.1.0 发布页](https://github.com/G-E-E-D/shunshoupai/releases/tag/v1.1.0) · [安装、连接与构建说明](docs/android.md)
 
 首次打开请填写电脑的局域网地址或已部署的 HTTPS 地址。APK 不内置日程后端，电脑本地演示时仍需运行 `npm run start`；手机上填写 `localhost` 会指向手机自身。
+
+Android 构建、签名校验、release 包模拟器安装启动及 5 项设备测试已通过，详见 [验收记录](docs/acceptance.md)。源码构建使用 JDK 17、Android SDK 36 和仓库内 Gradle 8.13 Wrapper。
 
 ![顺手排桌面界面](docs/screenshots/desktop.png)
 

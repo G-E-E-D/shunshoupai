@@ -6,8 +6,8 @@
 
 ## 下载与安装
 
-1. 打开 [GitHub Releases](https://github.com/G-E-E-D/shunshoupai/releases)，下载 Android 版本附带的 `.apk` 文件。
-2. 如版本同时提供 SHA-256 文件，可先核对下载文件的校验值。
+1. 打开 [v1.1.0 发布页](https://github.com/G-E-E-D/shunshoupai/releases/tag/v1.1.0)，下载 **[shunshoupai-android-v1.1.0.apk](https://github.com/G-E-E-D/shunshoupai/releases/download/v1.1.0/shunshoupai-android-v1.1.0.apk)**。
+2. 同一版本提供 [SHA256SUMS.txt](https://github.com/G-E-E-D/shunshoupai/releases/download/v1.1.0/SHA256SUMS.txt) 和 [signing-cert.txt](https://github.com/G-E-E-D/shunshoupai/releases/download/v1.1.0/signing-cert.txt)，可核对下载文件的校验值和签名信息。
 3. 在 Android 的文件管理器中打开 APK，按系统提示允许该文件管理器安装此来源的应用，再完成安装。
 4. 打开“顺手排”，输入服务地址，点击连接。进入工作台后注册或登录自己的账号。
 
@@ -16,10 +16,10 @@
 Windows 可用以下命令核对下载文件，结果应与 Release 中给出的 SHA-256 一致：
 
 ```powershell
-Get-FileHash -Algorithm SHA256 -LiteralPath .\shunshoupai-android.apk
+Get-FileHash -Algorithm SHA256 -LiteralPath .\shunshoupai-android-v1.1.0.apk
 ```
 
-实际文件名以 Release 附件为准。
+本版应用 ID 为 `com.shunshoupai.app`，`versionName=1.1.0`、`versionCode=2`。安装后请保持 Android System WebView 更新，以运行现有 Web 工作台。
 
 ## 连接电脑上的本地服务
 
@@ -61,20 +61,66 @@ WebView 是应用中显示工作台的组件，运行能力仍来自现有顺手
 
 ## 从源码构建
 
-Android 项目在 `android/`，可用 Android Studio 打开，或使用 Gradle Wrapper。按项目 Gradle 配置准备 JDK 和 Android SDK，然后运行：
+Android 项目在 `android/`，可用 Android Studio 打开，或使用仓库内的 Gradle Wrapper。与 CI 相同的构建环境为：
+
+| 项目 | 版本 |
+| --- | --- |
+| JDK | 17 |
+| Gradle Wrapper | 8.13，发行包及 Wrapper 校验值已记录 |
+| Android Gradle Plugin | 8.13.2 |
+| Android SDK Platform | 36，`compileSdk=36`、`targetSdk=36` |
+| Android Build Tools | 35.0.0 |
+| 最低运行系统 | Android 8.0，`minSdk=26` |
+
+将 `JAVA_HOME` 指向 JDK 17，将 `ANDROID_HOME` 指向 Android SDK 安装目录。安装 SDK 命令行工具后，在 Windows PowerShell 准备构建组件：
+
+```powershell
+& "$env:ANDROID_HOME\cmdline-tools\latest\bin\sdkmanager.bat" "platforms;android-36" "build-tools;35.0.0" "platform-tools"
+```
+
+然后在仓库根目录执行：
 
 ```powershell
 cd android
 .\gradlew.bat :app:assembleDebug
 ```
 
-调试 APK 位于 `android/app/build/outputs/apk/debug/`。运行设备测试时连接模拟器或开发手机，再运行 `:app:connectedDebugAndroidTest`。测试使用独立的本机 HTTP 夹具，不依赖付费模型或外部账号。
+调试 APK 位于 `android/app/build/outputs/apk/debug/app-debug.apk`。Linux/macOS 使用 `./gradlew` 代替 `gradlew.bat`。编译测试包并运行 Android lint：
+
+```powershell
+.\gradlew.bat :app:assembleDebugAndroidTest :app:lintDebug
+```
+
+连接模拟器或开发手机后，运行设备测试。完整的第 5 项测试需要另一个终端已按 README 启动同一份 Next.js 服务。Android 模拟器访问宿主电脑服务的示例：
+
+```powershell
+.\gradlew.bat :app:connectedDebugAndroidTest "-Pandroid.testInstrumentationRunnerArguments.backend_url=http://10.0.2.2:3000"
+```
+
+前 4 项测试使用设备内部的独立 HTTP 夹具；第 5 项通过真实 Android WebView 访问 Next.js，创建虚构测试账号，执行解析、保存和查询。未传入 `backend_url` 时，第 5 项会跳过；CI 会启动隔离的本地后端并传入地址，验证全部 5 项。不依赖付费模型或云端账号。
 
 正式 APK 使用 release 构建及独立签名。CI 通过 `ANDROID_KEYSTORE_BASE64`、`ANDROID_KEYSTORE_PASSWORD`、`ANDROID_KEY_ALIAS`、`ANDROID_KEY_PASSWORD` 四个加密仓库 Secrets 读取签名材料；密钥文件和密码不进入源码仓库。发布者应在安全位置备份签名文件与密码，后续更新必须使用相同签名。
 
 ## 验证记录
 
-Android 自动验证覆盖首次连接、地址校验、本机 HTTP 页面加载、连接配置持久化、WebView 限制及失败重试。最终 APK 的构建、签名验证和设备测试结果以对应 [Android CI](https://github.com/G-E-E-D/shunshoupai/actions/workflows/android.yml)与 Release 说明为准。
+2026-10-27 的 [Android CI 40493822690](https://github.com/G-E-E-D/shunshoupai/actions/runs/40493822690)已通过构建、签名校验、安装启动及全部 5 项设备测试：
+
+| 验证 | 实际结果 |
+| --- | --- |
+| 构建与静态检查 | 调试包、设备测试包、签名 release APK 和 Android lint 通过 |
+| 签名 | APK Signature Scheme v2、v3 验证通过；签名证书 SHA-256 为 `f1dd120e4936926c29308e21262013737b3a2747043a638dfb31a9a811afc87b` |
+| 正式 APK 安装与启动 | 在 Android 15 / API 35、x86_64、Pixel 7 配置模拟器安装 release APK；启动返回 `Status: ok`，进程存活，崩溃缓冲区为空；启动界面截图与界面树作为 CI 附件保存 |
+| 设备测试 | 5 项通过，0 失败、0 错误、0 跳过，耗时 18.812 秒 |
+| 客户端连接 | 首次连接、无效地址拒绝、真实本机 HTTP 页面加载、服务配置重建后保留、WebView 限制、断线重试恢复通过 |
+| 实际业务链路 | 调试测试包中的 WebView 加载真实工作台，验证 React 初始化、注册与会话 Cookie；规则解析并保存 3 项日程，查询及重新加载后在七天视图显示 |
+
+release APK 的安装启动与调试测试包的业务设备测试是两项独立验证；没有将调试包称作发布 APK。最终发布包对应的构建记录及 SHA-256 以 [v1.1.0 Release](https://github.com/G-E-E-D/shunshoupai/releases/tag/v1.1.0)说明和附件为准。
+
+正式包在模拟器中的首次连接界面：
+
+<img src="screenshots/android-setup.png" alt="Android 客户端首次连接界面" width="320" />
+
+模拟器截图中的浅色状态栏图标对比度仍偏低，后续按系统版本继续调整。
 
 当前文档不将模拟器测试称作实体手机测试；不同厂商系统、系统 WebView 版本及真实手机网络仍应实际验证。
 
