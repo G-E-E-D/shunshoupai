@@ -1,6 +1,6 @@
 package com.shunshoupai.app;
 
-import android.app.Activity;
+import android.annotation.SuppressLint;
 import android.app.AlertDialog;
 import android.content.ActivityNotFoundException;
 import android.content.Intent;
@@ -37,9 +37,12 @@ import android.widget.ProgressBar;
 import android.widget.TextView;
 import android.widget.Toast;
 
+import androidx.activity.ComponentActivity;
+import androidx.activity.OnBackPressedCallback;
+
 import java.net.URI;
 
-public final class MainActivity extends Activity {
+public final class MainActivity extends ComponentActivity {
     private static final String PREFS = "connection";
     private static final String SERVER_KEY = "server_url";
     private static final String STATE_SERVER = "trusted_server";
@@ -65,7 +68,7 @@ public final class MainActivity extends Activity {
     private final Runnable loadTimeout = () -> {
         if (webView != null && progress.getVisibility() == View.VISIBLE) {
             webView.stopLoading();
-            showLoadError("连接超时。请检查服务是否启动、局域网地址和防火墙设置，然后重试。");
+            showLoadError(getString(R.string.connection_timeout));
         }
     };
 
@@ -98,10 +101,9 @@ public final class MainActivity extends Activity {
         findViewById(R.id.error_retry).setOnClickListener(view -> reloadService());
         findViewById(R.id.error_settings).setOnClickListener(view -> showConnectionSettings());
         findViewById(R.id.cancel_connection).setOnClickListener(view -> showWebScreen());
-        if (Build.VERSION.SDK_INT >= 33) {
-            getOnBackInvokedDispatcher().registerOnBackInvokedCallback(
-                android.window.OnBackInvokedDispatcher.PRIORITY_DEFAULT, this::navigateBack);
-        }
+        getOnBackPressedDispatcher().addCallback(this, new OnBackPressedCallback(true) {
+            @Override public void handleOnBackPressed() { navigateBack(); }
+        });
 
         String saved = preferences.getString(SERVER_KEY, "");
         if (saved != null && !saved.isEmpty()) {
@@ -143,6 +145,9 @@ public final class MainActivity extends Activity {
     }
 
     @SuppressWarnings("deprecation")
+    // React requires JavaScript. Navigation is restricted to the configured
+    // origin, file/content access is disabled, and no native JS bridge exists.
+    @SuppressLint("SetJavaScriptEnabled")
     private void configureWebView() {
         WebSettings settings = webView.getSettings();
         settings.setJavaScriptEnabled(true);
@@ -310,7 +315,8 @@ public final class MainActivity extends Activity {
         webScreen.setVisibility(View.VISIBLE);
         try {
             URI uri = URI.create(serverAddress);
-            serverSummary.setText((uri.getScheme().equals("https") ? "HTTPS · " : "局域网 HTTP · ") + uri.getRawAuthority());
+            serverSummary.setText(getString(uri.getScheme().equals("https")
+                ? R.string.server_summary_https : R.string.server_summary_http, uri.getRawAuthority()));
         } catch (IllegalArgumentException ignored) { serverSummary.setText(R.string.empty_server); }
         if (webView != null) webView.onResume();
     }
@@ -367,11 +373,8 @@ public final class MainActivity extends Activity {
             if (!serverAddress.isEmpty()) showWebScreen();
             else finish();
         } else if (webView != null && webView.canGoBack() && !mainFrameFailed) webView.goBack();
-        else showConnectionSettings();
+        else finish();
     }
-
-    @SuppressWarnings("deprecation")
-    @Override public void onBackPressed() { navigateBack(); }
 
     @Override protected void onSaveInstanceState(Bundle state) {
         state.putString(STATE_SERVER, serverAddress);
