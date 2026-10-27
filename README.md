@@ -4,6 +4,8 @@
 
 [Windows 一键安装 EXE](https://github.com/G-E-E-D/shunshoupai/releases/download/v1.2.0/shunshoupai-desktop-v1.2.0-setup.exe) · [Android APK](https://github.com/G-E-E-D/shunshoupai/releases/download/v1.2.0/shunshoupai-android-v1.2.0.apk) · [发布页](https://github.com/G-E-E-D/shunshoupai/releases/tag/v1.2.0)
 
+![Qt 原生桌面实际渲染](https://github.com/G-E-E-D/shunshoupai/releases/download/v1.2.0/native-desktop.png)
+
 ## 安装后使用
 
 1. Windows 运行安装器，打开“顺手排”。安装包包含 Qt 运行库、Node.js 和本地服务，应用会自动启动服务，无需另装 Node。

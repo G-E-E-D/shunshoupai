@@ -37,11 +37,17 @@ Qt 烟测的 API 操作通过真实网络客户端发出，截图来自原生控
 
 ## 整包 CI
 
-Windows 安装器和 Android / NDK 整包将由当前源码流水线重新构建验证；完成后的具体运行链接、安装器校验和设备测试统计会在发布前补入本节。未通过的流水线不会记为通过。
+[服务、移动工作台与 PostgreSQL 17 CI 40504136069](https://github.com/G-E-E-D/shunshoupai/actions/runs/40504136069)已全部通过，包括 92 项测试、11 项界面集成、生产构建和三组 SQL 不变量。
+
+[Windows CI 40504136055](https://github.com/G-E-E-D/shunshoupai/actions/runs/40504136055)全部通过：MSVC / Qt 编译、C++ 测试、NSIS 安装器、实际静默安装、随包 Node / Qt 原生 API 与控件渲染、默认服务启动/退出，以及重装/卸载保留数据库与加密主密钥。
+
+[Android / NDK 首轮 CI 40504136057](https://github.com/G-E-E-D/shunshoupai/actions/runs/40504136057)全绿：正式签名包安装启动通过，7 项模拟器测试全部通过（26.617 秒，0 失败、0 错误、0 跳过），包括 JNI 校验和独立电脑会话签发 → 安卓扫码 → 自动登录同账号。首次使用提示进一步改成 Qt 桌面操作说明后，[最终 APK CI 40505404391](https://github.com/G-E-E-D/shunshoupai/actions/runs/40505404391)构建、签名、安装启动及模拟器复验也已全部通过；发布的 APK 来自这次最终构建。
 
 Windows 验收脚本验证静默安装、分发内的 Qt / Node、原生 API / 控件、默认启动与停止内置服务，以及重装/卸载保留隔离用户数据库。Android 验收脚本安装正式签名 APK，再运行调试测试包的 7 项设备测试，验证 JNI 协议、真实 WebView / API 与扫码同账号登录。
 
 历史 v1.1.0 的 [Android CI 40493822690](https://github.com/G-E-E-D/shunshoupai/actions/runs/40493822690)包含 5 项设备测试通过，只对应旧版本。正式安卓签名证书 SHA-256 为 `f1dd120e4936926c29308e21262013737b3a2747043a638dfb31a9a811afc87b`，新 APK 应沿用该证书。
+
+发布附件已与 Actions 下载文件逐一核对：Windows EXE SHA-256 为 `a4bd2e3d8bf6b284992ffef8736fb3181c5b72b3b9cfc0dac0a39010e46fd253`，Android APK 为 `f7eb6f8ada7dc57eccaf538f6aec0c984b97687db49ad7015e2d09811ce2bcd1`。安卓证书保持一致；Release 附带两份安装包、统一校验文件、公开证书摘要和原生 Qt 窗口截图。
 
 ## 外部环境边界
 

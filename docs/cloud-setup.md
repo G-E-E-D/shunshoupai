@@ -1,6 +1,6 @@
 # 云端配置与部署
 
-本地模式已经能让 Qt 原生桌面端、网页和 Android 共用一份真实数据：各端访问同一个 Node.js 服务并登录同一账号即可。桌面使用 C++ / Qt Widgets 与 Qt Network；Android 使用 Java、NDK/JNI 共享 C++ 协议核心，并保留 WebView 业务界面。需要公网访问、使用无持久磁盘的平台，或把服务部署到多个实例时，选择 Supabase 模式。
+本地模式已经能让 Qt 原生桌面端和 Android 共用一份真实数据：各端访问同一个 Node.js 服务并登录同一账号即可。桌面使用 C++ / Qt Widgets 与 Qt Network；Android 使用 Java、NDK/JNI 共享 C++ 协议核心，并保留 WebView 业务界面。需要公网访问、使用无持久磁盘的平台，或把服务部署到多个实例时，选择 Supabase 模式。
 
 本文提供可复现的云端接入步骤。仓库中的自动测试不会使用你的云端账号；未填入真实配置前，不代表已经完成公网部署或模型联调。
 
@@ -53,7 +53,7 @@ MODEL_SETTINGS_ENCRYPTION_KEY=your-private-32-byte-base64-key
 
 ## 3. 配置真实模型
 
-从 v1.2.0 起，普通用户可在 Qt 桌面端的原生“模型设置”，或网页和 Android 的“偏好与账号 → 模型设置”保存自己的接口、模型名和 Key。个人配置优先于下方的服务端默认模型，提示词固定在服务端代码；完整步骤见 [个人模型说明](model-settings.md)。
+从 v1.2.0 起，普通用户可在 Qt 桌面端的原生“模型设置”，或Android 的“偏好与账号 → 模型设置”保存自己的接口、模型名和 Key。个人配置优先于下方的服务端默认模型，提示词固定在服务端代码；完整步骤见 [个人模型说明](model-settings.md)。
 
 Supabase 和多实例部署必须先设置稳定的 `MODEL_SETTINGS_ENCRYPTION_KEY`（32 字节随机值的 Base64），用于加密保存个人 Key、扫码暂存的 access JWT 和临时登录 Cookie，各用途通过认证数据隔离。可在可信终端用 `node -e "console.log(require('node:crypto').randomBytes(32).toString('base64'))"` 生成，直接存入部署平台的私有环境变量；同一服务的所有实例必须一致。不要随意更换；备份数据库时同时备份加密主密钥，丢失后已有密文无法解密。需要连接管理员控制的本地模型时，再显式配置 `AI_ALLOWED_PRIVATE_HOSTS`，例如 `localhost,127.0.0.1`。
 
@@ -105,7 +105,7 @@ SQLite 模式兑换后产生独立 7 天手机会话。Supabase 模式不复制 
 5. 在浏览器开发者工具尝试直接写 `events` 表，RLS/权限应拒绝；正式 API 保存仍正常。
 6. 断网保存不能显示已同步；响应丢失后沿用原请求标识确认结果。
 7. 模型配置错误或超时时，输入保留，没有事件落库。
-8. 在 Qt 桌面端保存个人模型配置，网页和 Android 登录同一服务/账号后可读到元数据；其他账号看不到。两端同时编辑时，旧版本保存被拒绝。
+8. 在 Qt 桌面端保存个人模型配置，Android 登录同一服务/账号后可读到元数据；其他账号看不到。两端同时编辑时，旧版本保存被拒绝。
 9. 扫码后登录签发账号；旧码、已兑换码、过期码都失败。Supabase 临时授权到期后需要重新登录，二维码和应用日志中没有模型 Key 或 refresh token。
 
 迁移另附 [日程不变量测试](../supabase/tests/invariants.sql)、[模型配置测试](../supabase/tests/model-settings.sql)和[配对测试](../supabase/tests/pairing.sql)。仅在可丢弃的开发 Supabase 数据库，以 SQL Editor 或 `psql` 的管理员连接执行。测试会创建虚构用户与会话，切换 JWT 身份验证数据隔离，最终回滚所有变更：
