@@ -66,6 +66,13 @@ test("missing end and date are visibly assumed instead of silent defaults", () =
   assert.equal(result.events[0].assumptions.length, 2);
 });
 
+test("relative year and weekday prefixes are not silently discarded", () => {
+  assert.equal(parseWithRules("下星期三下午三点到四点面试", NOW).events[0].start_local, "2026-11-04T15:00:00");
+  assert.equal(parseWithRules("下下周三下午三点到四点面试", NOW).events[0].start_local, "2026-11-11T15:00:00");
+  assert.equal(parseWithRules("明年11月3日下午三点到四点面试", NOW).events[0].start_local, "2027-11-03T15:00:00");
+  assert.equal(parseWithRules("下个月1号下午三点到四点面试", NOW).needs_clarification, true);
+});
+
 test("five-item limit and length guard", () => {
   const text = Array.from({ length: 6 }, () => "明天下午三点到四点面试").join("，");
   assert.equal(parseWithRules(text, NOW).needs_clarification, true);

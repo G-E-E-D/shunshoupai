@@ -61,19 +61,20 @@ function dateIn(text: string, today: string): { date?: string; raw: string; inva
     const date = `${absolute[1]}-${absolute[2].padStart(2, "0")}-${absolute[3].padStart(2, "0")}`;
     return { date, raw: absolute[0], invalid: !validateLocal(`${date}T00:00:00`) };
   }
-  const monthDay = /(\d{1,2})月(\d{1,2})(?:日|号)/.exec(text);
+  const monthDay = /(?:(今年|明年|后年|去年)\s*)?(\d{1,2})月(\d{1,2})(?:日|号)/.exec(text);
   if (monthDay) {
-    const date = `${today.slice(0, 4)}-${monthDay[1].padStart(2, "0")}-${monthDay[2].padStart(2, "0")}`;
+    const yearOffset = ({ 今年: 0, 明年: 1, 后年: 2, 去年: -1 } as Record<string, number>)[monthDay[1]] || 0;
+    const date = `${Number(today.slice(0, 4)) + yearOffset}-${monthDay[2].padStart(2, "0")}-${monthDay[3].padStart(2, "0")}`;
     return { date, raw: monthDay[0], invalid: !validateLocal(`${date}T00:00:00`) };
   }
   const relative = /(今天|明天|后天|大后天)/.exec(text);
   if (relative) return { date: addDays(today, { 今天: 0, 明天: 1, 后天: 2, 大后天: 3 }[relative[1]]!), raw: relative[0] };
-  const week = /(?:(下|本|这)周|周|星期)([一二三四五六日天])/.exec(text);
+  const week = /(?:(下下|下|本|这)?(?:周|星期|礼拜))([一二三四五六日天])/.exec(text);
   if (week) {
     const weekday = new Date(`${today}T00:00:00Z`).getUTCDay();
     const monday = addDays(today, -((weekday + 6) % 7));
     const target = "一二三四五六日".indexOf(week[2] === "天" ? "日" : week[2]);
-    return { date: addDays(monday, target + (week[1] === "下" ? 7 : 0)), raw: week[0] };
+    return { date: addDays(monday, target + (week[1] === "下下" ? 14 : week[1] === "下" ? 7 : 0)), raw: week[0] };
   }
   return { raw: "" };
 }
@@ -95,6 +96,9 @@ export function parseWithRules(text: string, referenceTime: Date): ParseResult {
   for (const clause of clauses) {
     const date = dateIn(clause, today);
     if (date.invalid) { result.questions.push(`“${clause}”中的日期无效，请检查月份和日期。`); continue; }
+    if (!date.date && /明年|后年|去年|上个月|下个月|下月|月底|月初|周末|\d{1,2}号/.test(clause)) {
+      result.questions.push(`规则解析还不能确定“${clause}”的具体日期，请改用 YYYY-MM-DD 或“明天”等明确日期。`); continue;
+    }
     const clocks = clocksIn(clause);
     if (clocks.length === 0 || clocks.length > 2) {
       result.questions.push(`“${clause}”还需要具体的开始、结束时间，例如“明天下午三点到四点面试”。`); continue;
@@ -212,7 +216,7 @@ export async function parseText(text: string, referenceTime: Date, busy: Schedul
   // These product limits are enforced before a model can reinterpret them.
   if (UNSUPPORTED.test(parsed.text)) return parseWithRules(parsed.text, referenceTime);
   const checked = parseWithRules(parsed.text, referenceTime);
-  if (checked.questions.some((question) => /时间还不明确|中的日期无效/.test(question))) return addWarnings(checked, referenceTime, busy);
+  if (checked.questions.some((question) => /时间还不明确|中的日期无效|起止时间无效|时长无效|一次最多/.test(question))) return addWarnings(checked, referenceTime, busy);
   const result = process.env.AI_API_KEY ? await parseWithModel(parsed.text, referenceTime, busy) : checked;
   return addWarnings(result, referenceTime, busy);
 }
