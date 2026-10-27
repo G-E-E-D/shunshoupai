@@ -6,6 +6,14 @@
 
 [源码仓库](https://github.com/G-E-E-D/shunshoupai) · [图文教程](docs/tutorial.md) · [云端配置](docs/cloud-setup.md) · [验收记录](docs/acceptance.md) · [创作说明](docs/creation-note.md)
 
+## Android 客户端
+
+Android 8.0 及以上可安装安卓客户端，连接同一个日程服务并使用同一账号。它提供原生服务配置、返回、刷新和网络错误重试，日程界面与现有 Web 应用共用。
+
+[APK 发布页](https://github.com/G-E-E-D/shunshoupai/releases) · [安装、连接与构建说明](docs/android.md)
+
+首次打开请填写电脑的局域网地址或已部署的 HTTPS 地址。APK 不内置日程后端，电脑本地演示时仍需运行 `npm run start`；手机上填写 `localhost` 会指向手机自身。
+
 ![顺手排桌面界面](docs/screenshots/desktop.png)
 
 ## 五分钟运行
@@ -52,10 +60,11 @@ npm run dev
 | 错误处理 | 断网未发送显示未保存；响应丢失显示状态待确认，用原请求编号核实 |
 | 前台提醒 | 可选；开始前 5 分钟和进行中显示站内提示 |
 | 响应式界面 | 桌面双栏，手机单栏；截图见 [桌面](docs/screenshots/desktop.png) / [手机](docs/screenshots/mobile.png) |
+| Android 客户端 | 原生连接配置与 WebView 日程工作台；连接现有服务，安装及构建步骤见 [Android 说明](docs/android.md) |
 
 时间统一使用上海时区，接受 2000–2100 年、最长 24 小时的单次日程。缺少结束时间时，会明确标注默认 60 分钟等假设，仍由用户确认。“周五三点”缺少上午/下午会追问；循环、全天和跨时区表达不会被悄悄转换为单次日程。
 
-当前**未实现**自动寻找空档排期、后台/锁屏系统提醒、离线编辑合并、原生客户端、外部日历双向同步。草稿保留在当前浏览器，不承诺跨端共享。当前交付为可运行仓库和图文教程；真实模型、托管 Supabase、公网部署和真实手机网络测试需要相应账号配置，详见验收记录。
+当前**未实现**自动寻找空档排期、后台/锁屏系统提醒、离线编辑合并、iOS 客户端、外部日历双向同步。草稿保留在当前浏览器或安卓应用的本地网页存储中，不承诺跨端共享。交付包含源码、Android 客户端和图文教程；真实模型、托管 Supabase、公网部署和真实手机网络测试需要相应账号配置，详见验收记录。
 
 ## 配置与部署
 
@@ -97,6 +106,7 @@ npm run test:e2e
 ```text
 src/app/                 响应式界面和 Route Handler API
 src/components/          可编辑草稿、日程与同步工作台
+android/                 Android 原生连接界面与 WebView 客户端
 src/lib/parser.ts        规则解析、真实模型适配和结构校验
 src/lib/server/          账号、SQLite/Supabase、事务与请求保护
 supabase/                云端迁移及 SQL 不变量测试
