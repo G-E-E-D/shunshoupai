@@ -104,6 +104,8 @@ jobs:
           cp app/build/outputs/apk/release/app-release.apk "release/$RELEASE_APK_NAME"
           cp app/build/release-metadata.json release/release-metadata.json
           "$ANDROID_HOME/build-tools/35.0.0/apksigner" verify --verbose --print-certs "release/$RELEASE_APK_NAME" | tee release/signing-cert.txt
+          "$ANDROID_HOME/build-tools/35.0.0/zipalign" -c -P 16 -v 4 "release/$RELEASE_APK_NAME" > release/zip-alignment.txt
+          python3 ci/check-native-alignment.py "release/$RELEASE_APK_NAME" | tee release/native-alignment.txt
           "$ANDROID_HOME/build-tools/35.0.0/aapt" dump badging "release/$RELEASE_APK_NAME" > release/apk-metadata.txt
           python3 - <<'PY'
           import json, shlex
@@ -178,7 +180,7 @@ jobs:
         run: |
           npm ci
           npm run build
-      - name: Start isolated live backend for Android WebView tests
+      - name: Start isolated live backend for Android pairing tests
         working-directory: .
         env:
           APP_STORAGE: local

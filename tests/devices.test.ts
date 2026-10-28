@@ -14,6 +14,8 @@ function use(run: (store: LocalStore) => void) { const store = new LocalStore(":
 test("first local bootstrap needs no account and retains its identity/calendar across reconnects", () => use((store) => {
   const first = store.devices.bootstrap("我的电脑", "windows");
   const context = store.devices.context();
+  assert.deepEqual(context.capabilities, { replica: 1, web: false, ai: false });
+  assert.equal(context.device.platform, "windows");
   assert.equal(first.grant.role, "owner");
   assert.equal(first.grant.space_id, context.space_id);
   store.commit(context.space_id, randomUUID(), [draft]);

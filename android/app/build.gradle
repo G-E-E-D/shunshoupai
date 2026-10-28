@@ -25,8 +25,8 @@ android {
         applicationId 'com.shunshoupai.app'
         minSdk 26
         targetSdk 36
-        versionCode 6
-        versionName '2.0.0'
+        versionCode 9
+        versionName '2.1.0'
         testInstrumentationRunner 'androidx.test.runner.AndroidJUnitRunner'
     }
 
@@ -97,6 +97,7 @@ tasks.register('writeReleaseMetadata') {
 
 dependencies {
     implementation 'androidx.activity:activity:1.11.0'
+    implementation 'com.google.mlkit:text-recognition-chinese:16.0.1'
     implementation 'com.journeyapps:zxing-android-embedded:4.3.0'
     androidTestImplementation 'androidx.test:runner:1.7.0'
     androidTestImplementation 'androidx.test:core:1.7.0'

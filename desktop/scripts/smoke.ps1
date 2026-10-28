@@ -38,7 +38,7 @@ function Run-Installer {
 }
 try {
     Run-Installer
-    foreach ($relative in @('Shunshoupai.exe','runtime\node.exe','resources\backend\server.js','Qt6Core.dll','Qt6Widgets.dll','Qt6Network.dll','platforms\qwindows.dll','licenses\Qt\LGPL-3.0-only.txt')) {
+    foreach ($relative in @('Shunshoupai.exe','runtime\node.exe','resources\backend\server.js','Qt6Core.dll','Qt6Widgets.dll','Qt6Network.dll','platforms\qwindows.dll','licenses\Qt\LGPL-3.0-only.txt','capture-java\ShunshoupaiCapture.exe','capture-java\runtime\bin\java.exe','capture-java\resources\tessdata\chi_sim.traineddata','capture-java\resources\tessdata\eng.traineddata')) {
         if (!(Test-Path -LiteralPath (Join-Path $installDirectory $relative))) { throw "Installer payload is missing $relative." }
     }
     if ((Get-Item -LiteralPath (Join-Path $installDirectory 'Shunshoupai.exe')).VersionInfo.ProductVersion -ne $expectedVersion) { throw 'Installed application version does not match the release.' }
@@ -60,13 +60,25 @@ try {
     Wait-ForApi 'http://127.0.0.1:43129' $backend
     $screenshot = Join-Path $reports.FullName 'native-desktop.png'
     $application = Start-Process -FilePath (Join-Path $installDirectory 'Shunshoupai.exe') -ArgumentList @('--smoke-test','--backend','http://127.0.0.1:43129','--screenshot',('"' + $screenshot + '"')) -WorkingDirectory $installDirectory -WindowStyle Hidden -PassThru -RedirectStandardOutput (Join-Path $reports.FullName 'native.log') -RedirectStandardError (Join-Path $reports.FullName 'native-error.log')
-    if (!$application.WaitForExit(180000)) { $application.Kill(); throw 'Native API/widget smoke test timed out.' }
+    if (!$application.WaitForExit(180000)) { $application.Kill($true); throw 'Native API/widget smoke test timed out.' }
     if ($application.ExitCode -ne 0) { throw "Native API/widget smoke test failed ($($application.ExitCode))." }
     if (!(Test-Path -LiteralPath $screenshot) -or (Get-Item -LiteralPath $screenshot).Length -lt 1000) { throw 'Native widget screenshot was not produced.' }
     $visualDirectory = Join-Path $reports.FullName 'ui'
     $application = Start-Process -FilePath (Join-Path $installDirectory 'Shunshoupai.exe') -ArgumentList @('--visual-smoke',('"' + $visualDirectory + '"'),'--backend','http://127.0.0.1:43129') -WorkingDirectory $installDirectory -WindowStyle Hidden -PassThru -RedirectStandardOutput (Join-Path $reports.FullName 'visual.log') -RedirectStandardError (Join-Path $reports.FullName 'visual-error.log')
-    if (!$application.WaitForExit(180000)) { $application.Kill(); throw 'Native dialog interaction test timed out.' }
+    if (!$application.WaitForExit(180000)) { $application.Kill($true); throw 'Native dialog interaction test timed out.' }
     if ($application.ExitCode -ne 0) { throw "Native dialog interaction test failed ($($application.ExitCode))." }
+    $javaDirectory = Join-Path $reports.FullName 'java-handoff'
+    $application = Start-Process -FilePath (Join-Path $installDirectory 'Shunshoupai.exe') -ArgumentList @('--java-capture-smoke',('"' + $javaDirectory + '"'),'--backend','http://127.0.0.1:43129') -WorkingDirectory $installDirectory -WindowStyle Hidden -PassThru -RedirectStandardOutput (Join-Path $reports.FullName 'java-handoff.log') -RedirectStandardError (Join-Path $reports.FullName 'java-handoff-error.log')
+    if (!$application.WaitForExit(150000)) { $application.Kill($true); throw 'Installed Java/native handoff timed out.' }
+    if ($application.ExitCode -ne 0) { throw "Installed Java/native handoff failed ($($application.ExitCode))." }
+    # This CI run requires a real interactive desktop; a locked/unsupported
+    # environment fails rather than substituting an in-memory image test.
+    $physicalDirectory = Join-Path $reports.FullName 'java-screen'
+    $application = Start-Process -FilePath (Join-Path $installDirectory 'capture-java\ShunshoupaiCapture.exe') -ArgumentList @('--capture-smoke','--output',('"' + $physicalDirectory + '"')) -WorkingDirectory $installDirectory -WindowStyle Hidden -PassThru -RedirectStandardOutput (Join-Path $reports.FullName 'java-screen.log') -RedirectStandardError (Join-Path $reports.FullName 'java-screen-error.log')
+    if (!$application.WaitForExit(120000)) { $application.Kill($true); throw 'Installed Java physical screen capture timed out.' }
+    if ($application.ExitCode -ne 0) { throw "Installed Java physical screen capture failed ($($application.ExitCode))." }
+    $physical = Get-Content -LiteralPath (Join-Path $physicalDirectory 'java-ocr-smoke.json') -Raw -Encoding utf8 | ConvertFrom-Json
+    if (!$physical.ok -or !$physical.real_local_ocr -or !$physical.physical_capture) { throw 'Physical Java capture report is not a successful real capture.' }
     Stop-Process -Id $backend.Id -ErrorAction SilentlyContinue
     $backend.WaitForExit(10000) | Out-Null
     & (Join-Path $PSScriptRoot 'test-peers.ps1') -AppDirectory $installDirectory -TestRoot (Join-Path $isolatedData.FullName 'peer-tests') -ReportDirectory (Join-Path $reports.FullName 'peers')
@@ -94,7 +106,7 @@ try {
     } catch { $anonymousDenied = [int]$_.Exception.Response.StatusCode -eq 401 }
     if (!$anonymousDenied) { throw 'Default launch exposed local schedules to an unpaired HTTP client.' }
     $application.CloseMainWindow() | Out-Null
-    if (!$application.WaitForExit(10000)) { $application.Kill(); $application.WaitForExit(10000) | Out-Null }
+    if (!$application.WaitForExit(10000)) { $application.Kill($true); $application.WaitForExit(10000) | Out-Null }
     for ($attempt = 0; $attempt -lt 20; $attempt++) {
         $listener = Get-NetTCPConnection -LocalPort 43127 -State Listen -ErrorAction SilentlyContinue
         if (!$listener) { break }
@@ -121,7 +133,7 @@ try {
     Set-Content -LiteralPath (Join-Path $reports.FullName 'result.txt') -Encoding utf8 -Value 'PASS: silent install; distributed Node/Qt; native API and widgets; default launch privately bootstraps a local device, denies unpaired access, and persists protected credentials; backend shutdown; reinstall/uninstall preserve user database and model encryption key.'
 } finally {
     foreach ($process in @($application, $backend)) {
-        if ($process -and !$process.HasExited) { Stop-Process -Id $process.Id -ErrorAction SilentlyContinue }
+        if ($process -and !$process.HasExited) { $process.Kill($true) }
     }
     foreach ($entry in $savedEnvironment.GetEnumerator()) { [Environment]::SetEnvironmentVariable($entry.Key, $entry.Value, 'Process') }
 }

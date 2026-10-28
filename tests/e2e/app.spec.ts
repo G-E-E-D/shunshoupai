@@ -37,7 +37,7 @@ function draft(title: string, start = "09:00", end = "10:00"): EventDraft {
   };
 }
 
-test("two independent devices parse, review, save, synchronize edits, complete and delete", async ({
+test("the owner parses locally while a paired device views and edits only schedules", async ({
   page,
   browser,
 }, testInfo) => {
@@ -53,11 +53,9 @@ test("two independent devices parse, review, save, synchronize edits, complete a
   try {
     await pairDevice(page.request, mobile.request);
     await loadWorkbench(mobile);
-    const agendaTop = await mobile.locator(".agenda-column").evaluate(element => element.getBoundingClientRect().top);
-    const composerTop = await mobile.locator(".composer-card").evaluate(element => element.getBoundingClientRect().top);
-    expect(agendaTop).toBeLessThan(composerTop);
-    await mobile.getByRole("button", { name: "一句话安排", exact: true }).click();
-    await expect(mobile.getByLabel("描述你的日程安排")).toBeFocused();
+    await expect(mobile.getByLabel("描述你的日程安排")).toHaveCount(0);
+    await expect(mobile.getByRole("button", { name: "一句话安排", exact: true })).toHaveCount(0);
+    await expect(mobile.getByText("配对仅同步日程，请在本机应用使用智能整理。", { exact: true })).toBeVisible();
     await mobile.getByRole("button", { name: "七天", exact: true }).click();
     await page.getByLabel("描述你的日程安排").fill(example);
     await page.getByRole("button", { name: "帮我整理一下" }).click();
@@ -143,11 +141,11 @@ test("two independent devices parse, review, save, synchronize edits, complete a
     }));
     expect(dimensions.page).toBeLessThanOrEqual(dimensions.viewport);
 
-    await page
+    await mobile
       .getByRole("button", { name: "完成日程：改简历", exact: true })
       .click();
     await expect(
-      mobile.getByRole("button", { name: "恢复日程：改简历", exact: true }),
+      page.getByRole("button", { name: "恢复日程：改简历", exact: true }),
     ).toBeVisible();
     await page
       .getByRole("button", { name: "删除日程：准备面试", exact: true })

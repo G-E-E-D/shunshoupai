@@ -1,4 +1,4 @@
-import { assertAuthActive, requireAuth } from "@/lib/server/auth";
+import { assertAuthActive, requireLocalFeature } from "@/lib/server/auth";
 import { consumeAiQuota } from "@/lib/server/events";
 import { AppError } from "@/lib/server/errors";
 import { handle, rateLimit, readJson } from "@/lib/server/http";
@@ -10,7 +10,7 @@ export const dynamic = "force-dynamic";
 
 export async function POST(request: Request) {
   return handle(async () => {
-    const auth = await requireAuth();
+    const auth = await requireLocalFeature();
     const input = testModelSettingsSchema.parse(await readJson(request));
     assertAuthActive(auth);
     rateLimit(`model-settings:test:${auth.user.id}`, 6, 60_000);

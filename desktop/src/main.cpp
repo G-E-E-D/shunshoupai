@@ -26,11 +26,12 @@ int main(int argc, char **argv) {
     parser.addOption({"backend", "Connect an existing backend instead of starting the bundled one.", "url"});
     parser.addOption({"smoke-test", "Exercise the native client against an isolated test backend."});
     parser.addOption({"visual-smoke", "Exercise native dialogs and save rendered UI evidence.", "directory"});
+    parser.addOption({"java-capture-smoke", "Test the packaged Java OCR and native draft handoff using synthetic images, without desktop capture.", "directory"});
     parser.addOption({"peer-smoke", "Exercise native pairing and explicit conflict resolution against two isolated backends.", "directory"});
     parser.addOption({"peer-resume-smoke", "Verify peer persistence and reconnection after both isolated backends restart.", "directory"});
     parser.addOption({"screenshot", "Save the native widget screenshot during --smoke-test.", "path"});
     parser.process(app);
-    const bool smoke = parser.isSet("smoke-test") || parser.isSet("visual-smoke") || parser.isSet("peer-smoke") || parser.isSet("peer-resume-smoke");
+    const bool smoke = parser.isSet("smoke-test") || parser.isSet("visual-smoke") || parser.isSet("java-capture-smoke") || parser.isSet("peer-smoke") || parser.isSet("peer-resume-smoke");
     if (smoke && !parser.isSet("backend")) return 4;
     std::unique_ptr<QTemporaryDir> smokeSettings;
     if (smoke) {
@@ -73,6 +74,7 @@ int main(int argc, char **argv) {
     if (parser.isSet("peer-smoke")) return window.peerSmoke(parser.value("peer-smoke"));
     if (parser.isSet("peer-resume-smoke")) return window.peerSmoke(parser.value("peer-resume-smoke"), true);
     if (parser.isSet("visual-smoke")) return window.visualSmoke(parser.value("visual-smoke"));
+    if (parser.isSet("java-capture-smoke")) return window.javaCaptureSmoke(parser.value("java-capture-smoke"));
     if (smoke) {
         if (!parser.isSet("backend")) return 4;
         return window.smokeTest(parser.value("screenshot"));

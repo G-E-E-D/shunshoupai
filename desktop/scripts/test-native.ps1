@@ -40,14 +40,18 @@ try {
     if (!$ready) { throw 'Bundled backend did not become ready.' }
     $screenshot = '"' + (Join-Path $TestRoot 'native-desktop.png') + '"'
     $application = Start-Process -FilePath (Join-Path $AppDirectory 'Shunshoupai.exe') -ArgumentList @('--smoke-test','--backend','http://127.0.0.1:43129','--screenshot',$screenshot) -WorkingDirectory $AppDirectory -WindowStyle Hidden -PassThru -RedirectStandardOutput (Join-Path $TestRoot 'native.log') -RedirectStandardError (Join-Path $TestRoot 'native-error.log')
-    if (!$application.WaitForExit(120000)) { $application.Kill(); throw 'Native API/widget smoke test timed out.' }
+    if (!$application.WaitForExit(120000)) { $application.Kill($true); throw 'Native API/widget smoke test timed out.' }
     if ($application.ExitCode -ne 0) { throw "Native smoke failed (exit $($application.ExitCode)); reports: $TestRoot" }
     $image = Get-Item -LiteralPath (Join-Path $TestRoot 'native-desktop.png')
     if ($image.Length -lt 1000) { throw 'Native widget screenshot is missing or empty.' }
     $visualDirectory = '"' + (Join-Path $TestRoot 'ui') + '"'
     $application = Start-Process -FilePath (Join-Path $AppDirectory 'Shunshoupai.exe') -ArgumentList @('--visual-smoke',$visualDirectory,'--backend','http://127.0.0.1:43129') -WorkingDirectory $AppDirectory -WindowStyle Hidden -PassThru -RedirectStandardOutput (Join-Path $TestRoot 'visual.log') -RedirectStandardError (Join-Path $TestRoot 'visual-error.log')
-    if (!$application.WaitForExit(180000)) { $application.Kill(); throw 'Native dialog interaction test timed out.' }
+    if (!$application.WaitForExit(180000)) { $application.Kill($true); throw 'Native dialog interaction test timed out.' }
     if ($application.ExitCode -ne 0) { throw "Native dialog interaction test failed ($($application.ExitCode)); reports: $TestRoot" }
+    $javaDirectory = '"' + (Join-Path $TestRoot 'java-capture') + '"'
+    $application = Start-Process -FilePath (Join-Path $AppDirectory 'Shunshoupai.exe') -ArgumentList @('--java-capture-smoke',$javaDirectory,'--backend','http://127.0.0.1:43129') -WorkingDirectory $AppDirectory -WindowStyle Hidden -PassThru -RedirectStandardOutput (Join-Path $TestRoot 'java-capture.log') -RedirectStandardError (Join-Path $TestRoot 'java-capture-error.log')
+    if (!$application.WaitForExit(150000)) { $application.Kill($true); throw 'Java/native text handoff timed out.' }
+    if ($application.ExitCode -ne 0) { throw "Java/native text handoff failed ($($application.ExitCode)); reports: $TestRoot" }
     Stop-Process -Id $backend.Id -ErrorAction SilentlyContinue
     $backend.WaitForExit(10000) | Out-Null
     & (Join-Path $PSScriptRoot 'test-peers.ps1') -AppDirectory $AppDirectory -TestRoot (Join-Path $TestRoot 'peer-data') -ReportDirectory (Join-Path $TestRoot 'peer-reports')
@@ -55,7 +59,7 @@ try {
 } finally {
     foreach ($process in @($application, $backend)) {
         if ($process -and !$process.HasExited) {
-            Stop-Process -Id $process.Id -ErrorAction SilentlyContinue
+            $process.Kill($true)
             $process.WaitForExit(10000) | Out-Null
         }
     }

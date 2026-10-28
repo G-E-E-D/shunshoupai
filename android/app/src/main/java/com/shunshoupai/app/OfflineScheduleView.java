@@ -40,6 +40,11 @@ final class OfflineScheduleView extends LinearLayout {
     private final EditText search;
     private final SharedPreferences drafts;
     private final Button addButton;
+    private final Button modelButton,reminderButton,captureButton;
+    private final Button dayTab,weekTab,completedTab;
+    private final LinearLayout dateRow;
+    private final SharedPreferences uiState;
+    private String mode="day";
     private String editingId;
     private AlertDialog activeEditor;
     private String rendered="";
@@ -49,24 +54,42 @@ final class OfflineScheduleView extends LinearLayout {
     OfflineScheduleView(Context context,LocalScheduleStore store,Runnable connect,Runnable online,Runnable changed) {
         super(context);this.store=store;this.changed=changed;
         drafts=context.getSharedPreferences("offline-editor",Context.MODE_PRIVATE);
+        uiState=context.getSharedPreferences("native-workbench",Context.MODE_PRIVATE);
+        mode=uiState.getString("view","day");
+        try{selected=LocalDate.parse(uiState.getString("date",selected.toString()));}catch(Exception ignored){}
         setOrientation(VERTICAL);setPadding(dp(18),dp(16),dp(18),dp(8));setBackgroundColor(Color.rgb(248,250,253));
-        TextView title=text("顺手排",26,true);addView(title);
+        LinearLayout heading=row();TextView title=text("顺手排",26,true);heading.addView(title,weighted());
+        modelButton=button("模型",()->{});modelButton.setId(R.id.offline_model_settings);modelButton.setContentDescription("本机模型设置");heading.addView(modelButton);
+        captureButton=button("取字",()->{});captureButton.setId(R.id.offline_capture);captureButton.setContentDescription("悬浮屏幕取字设置");heading.addView(captureButton);
+        reminderButton=button("提醒",()->{});reminderButton.setId(R.id.offline_reminders);reminderButton.setContentDescription("本机提醒设置");heading.addView(reminderButton);addView(heading);
         identity=text("本机日程 · 打开就能用",12,false);addView(identity);
         status=text("日程保存在本机，已配对设备可达后自动合并",12,false);status.setAccessibilityLiveRegion(View.ACCESSIBILITY_LIVE_REGION_POLITE);addView(status);
         LinearLayout actions=row();
         addButton=button("＋ 新日程",()->edit(null));addButton.setId(R.id.offline_add);actions.addView(addButton,weighted());
         addButton.setBackgroundResource(R.drawable.button_background);addButton.setTextColor(Color.WHITE);
-        Button intelligent=button("电脑工具",online);intelligent.setId(R.id.offline_online);actions.addView(intelligent,weighted());
+        Button intelligent=button("智能整理",online);intelligent.setId(R.id.offline_online);actions.addView(intelligent,weighted());
         Button connection=button("设备与同步",connect);connection.setId(R.id.offline_connect);actions.addView(connection,weighted());addView(actions);
-        LinearLayout dates=row();dates.addView(button("‹",()->{selected=selected.minusDays(1);refresh();}));
-        date=button("",()->new DatePickerDialog(context,(v,y,m,d)->{selected=LocalDate.of(y,m+1,d);refresh();},selected.getYear(),selected.getMonthValue()-1,selected.getDayOfMonth()).show());
-        dates.addView(date,weighted());dates.addView(button("›",()->{selected=selected.plusDays(1);refresh();}));dates.addView(button("今天",()->{selected=LocalDate.now(LocalScheduleStore.ZONE);refresh();}));addView(dates);
+        LinearLayout tabs=row();dayTab=button("日程",()->setMode("day"));dayTab.setId(R.id.offline_tab_day);tabs.addView(dayTab,weighted());
+        weekTab=button("七天",()->setMode("week"));weekTab.setId(R.id.offline_tab_week);tabs.addView(weekTab,weighted());
+        completedTab=button("已完成",()->setMode("completed"));completedTab.setId(R.id.offline_tab_completed);tabs.addView(completedTab,weighted());addView(tabs);
+        dateRow=row();dateRow.addView(button("‹",()->showDate(selected.minusDays("week".equals(mode)?7:1))));
+        date=button("",()->new NativeMonthDialog(getContext(),store,scope,selected,this::showDate).show());date.setId(R.id.offline_month);date.setContentDescription("打开月历并选择日期");
+        dateRow.addView(date,weighted());dateRow.addView(button("›",()->showDate(selected.plusDays("week".equals(mode)?7:1))));dateRow.addView(button("今天",()->showDate(LocalDate.now(LocalScheduleStore.ZONE))));addView(dateRow);
         search=new EditText(context);search.setSingleLine(true);search.setHint("搜索全部日程");search.setTextSize(14);search.setContentDescription("搜索全部日程");search.setImeOptions(EditorInfo.IME_ACTION_DONE);addView(search);
         search.addTextChangedListener(new TextWatcher(){public void beforeTextChanged(CharSequence s,int st,int count,int after){}public void onTextChanged(CharSequence s,int st,int before,int count){refresh();}public void afterTextChanged(Editable e){}});
         scroll=new ScrollView(context);list=new LinearLayout(context);list.setOrientation(VERTICAL);scroll.addView(list);addView(scroll,new LayoutParams(LayoutParams.MATCH_PARENT,0,1));
         refresh();
     }
 
+    void setCaptureAction(Runnable action){captureButton.setOnClickListener(v->action.run());}
+    void setCaptureActive(boolean active){captureButton.setText(active?"取字中":"取字");captureButton.setContentDescription(active?"屏幕取字已开启，点此停止":"开启悬浮屏幕取字");}
+    void setModelAction(Runnable action){modelButton.setOnClickListener(v->action.run());}
+    void setReminderEnabled(boolean enabled){reminderButton.setText(enabled?"提醒开":"提醒");reminderButton.setContentDescription(enabled?"本机前台提醒已开启":"本机前台提醒已关闭");}
+    void setReminderAction(Runnable action){reminderButton.setOnClickListener(v->action.run());}
+    LocalDate selectedDate(){return selected;}
+    void showDate(LocalDate value){selected=value;uiState.edit().putString("date",selected.toString()).apply();refresh();}
+    private void setMode(String value){mode=value;uiState.edit().putString("view",mode).apply();refresh();}
+    private void updateTabs(){Button[] buttons={dayTab,weekTab,completedTab};String[] modes={"day","week","completed"};for(int i=0;i<buttons.length;i++){boolean active=modes[i].equals(mode);buttons[i].setSelected(active);buttons[i].setBackgroundResource(active?R.drawable.button_background:R.drawable.tonal_button_background);buttons[i].setTextColor(active?Color.WHITE:getResources().getColor(R.color.accent,getContext().getTheme()));}}
     void setScope(String value){if(scope.equals(value))return;if(activeEditor!=null&&!store.canonicalScope(scope).equals(value))activeEditor.dismiss();scope=value;refresh();}
     void setStatus(String message){status.setText(message);refresh();}
     String scope(){return scope;}
@@ -81,11 +104,13 @@ final class OfflineScheduleView extends LinearLayout {
         addButton.setText(readDraft("new")==null?"＋ 新日程":"继续草稿");
         identity.setText(store.isPrimary(scope)?"本机主日程 · 打开就能用":"旧资料 · 独立保留，仅供查看");
         addButton.setEnabled(store.isPrimary(scope));
-        date.setText(selected.format(DateTimeFormatter.ofPattern("M月d日 E",java.util.Locale.CHINA)));
+        search.setHint("completed".equals(mode)?"搜索全部已完成日程":"搜索全部未完成日程");
+        updateTabs();dateRow.setVisibility("completed".equals(mode)?View.GONE:View.VISIBLE);
+        date.setText("week".equals(mode)?selected.format(DateTimeFormatter.ofPattern("M/d"))+" — "+selected.plusDays(6).format(DateTimeFormatter.ofPattern("M/d")):selected.format(DateTimeFormatter.ofPattern("M月d日 E",java.util.Locale.CHINA)));
         int scrollY=scroll.getScrollY();
         try {
             List<JSONObject> events=store.list(scope);String query=search.getText().toString().trim().toLowerCase(java.util.Locale.ROOT);int shown=0,pending=0,conflicts=0;
-            String fingerprint=scope+"|"+selected+"|"+query+"|"+events.toString();
+            String fingerprint=mode+"|"+scope+"|"+selected+"|"+query+"|"+events.toString();
             if(fingerprint.equals(rendered))return;
             rendered=fingerprint;list.removeAllViews();
             for(JSONObject event:events){if(event.optBoolean("dirty"))pending++;if(hasConflict(event))conflicts++;}
@@ -94,9 +119,11 @@ final class OfflineScheduleView extends LinearLayout {
             for(JSONObject event:events) {
                 boolean conflict=hasConflict(event);
                 if(event.optBoolean("deleted")&&!conflict)continue;
+                boolean completed="completed".equals(event.optString("status"));
+                if(!conflict && ("completed".equals(mode)!=completed))continue;
                 String start=event.getString("start_local"),end=event.getString("end_local");
                 if(!query.isEmpty()){if(!event.getString("title").toLowerCase(java.util.Locale.ROOT).contains(query))continue;}
-                else if(!conflict && !(start.compareTo(selected.plusDays(1).atStartOfDay().format(LocalScheduleStore.LOCAL))<0 && end.compareTo(selected.atStartOfDay().format(LocalScheduleStore.LOCAL))>0))continue;
+                else if(!conflict && !"completed".equals(mode) && !(start.compareTo(selected.plusDays("week".equals(mode)?7:1).atStartOfDay().format(LocalScheduleStore.LOCAL))<0 && end.compareTo(selected.atStartOfDay().format(LocalScheduleStore.LOCAL))>0))continue;
                 shown++;LinearLayout card=new LinearLayout(getContext());card.setOrientation(VERTICAL);card.setPadding(dp(10),dp(8),dp(10),dp(8));card.setBackgroundResource(R.drawable.panel_background);
                 LayoutParams margins=new LayoutParams(LayoutParams.MATCH_PARENT,LayoutParams.WRAP_CONTENT);margins.topMargin=dp(10);list.addView(card,margins);
                 LinearLayout heading=row();CheckBox done=new CheckBox(getContext());done.setChecked("completed".equals(event.getString("status")));done.setContentDescription("完成日程："+event.getString("title"));done.setEnabled(store.isPrimary(scope)&&!conflict&&!event.optBoolean("deleted"));
@@ -108,7 +135,7 @@ final class OfflineScheduleView extends LinearLayout {
                 if(!conflict)buttons.addView(button("删除",()->new AlertDialog.Builder(getContext()).setTitle("删除这项日程？").setMessage(event.optString("title")).setNegativeButton("取消",null).setPositiveButton("删除",(dialog,which)->{try{JSONObject wanted=LocalScheduleStore.desired(event);wanted.put("deleted",true);store.save(scope,event.getString("id"),wanted,event.getInt("base_version"));refresh();changed.run();}catch(Exception error){showError();}}).show()),weighted());
                 if(store.isPrimary(scope))card.addView(buttons);
             }
-            if(shown==0){TextView empty=text(query.isEmpty()?"这一天还没有安排\n点击「新日程」记下来，没联网也能用。":"没有找到相关日程",16,false);empty.setGravity(Gravity.CENTER);empty.setPadding(0,dp(48),0,0);list.addView(empty);}
+            if(shown==0){TextView empty=text(query.isEmpty()?("completed".equals(mode)?"还没有完成的日程\n完成一项安排后会在这里保留。":"week".equals(mode)?"这七天还没有安排\n写下一句话，手机就能帮你整理成草稿。":"这一天还没有安排\n点击「新日程」或「智能整理」，没联网也能用。"):"没有找到相关日程",16,false);empty.setGravity(Gravity.CENTER);empty.setPadding(0,dp(48),0,0);list.addView(empty);}
             scroll.post(()->scroll.scrollTo(0,scrollY));
         } catch(Exception error){showError();}
     }
@@ -176,7 +203,7 @@ final class OfflineScheduleView extends LinearLayout {
                 String value=title.getText().toString().trim();long duration=Duration.between(times[0],times[1]).toMinutes();
                 if(value.isEmpty()){title.setError("写下日程名称");title.requestFocus();return;}
                 if(duration<=0||duration>1440||times[0].getYear()<2000||times[1].getYear()>2100){error.setText("结束时间需晚于开始，单次不超过 24 小时，日期范围为 2000–2100 年。");return;}
-                try {store.save(editingScope,existing==null?null:existing.getString("id"),LocalScheduleStore.payload(value,times[0],times[1],existing==null?"planned":existing.getString("status"),false),baseVersion);SharedPreferences.Editor cleared=drafts.edit();for(String candidate:store.draftScopes(editingScope))cleared.remove(draftKey(candidate,draftId));cleared.apply();selected=times[0].toLocalDate();refresh();changed.run();dialog.dismiss();}catch(Exception failure){error.setText(failure instanceof AncestryReplica.Invalid ? failure.getMessage()+"，草稿仍保留。" : "保存失败，请重试，内容仍在。");}
+                try {store.save(editingScope,existing==null?null:existing.getString("id"),LocalScheduleStore.payload(value,times[0],times[1],existing==null?"planned":existing.getString("status"),false),baseVersion);SharedPreferences.Editor cleared=drafts.edit();for(String candidate:store.draftScopes(editingScope))cleared.remove(draftKey(candidate,draftId));cleared.apply();showDate(times[0].toLocalDate());changed.run();dialog.dismiss();}catch(Exception failure){error.setText(failure instanceof AncestryReplica.Invalid ? failure.getMessage()+"，草稿仍保留。" : "保存失败，请重试，内容仍在。");}
             }));dialog.show();title.requestFocus();
         } catch(Exception error){showError();}
     }

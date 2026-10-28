@@ -5,6 +5,7 @@ import { randomUUID } from "node:crypto";
 import { mkdir } from "node:fs/promises";
 import type { ModelSettingsInfo } from "../../src/lib/types";
 import { addDays } from "../../src/lib/time";
+import { createRevision } from "../../src/lib/replica";
 import { pairDevice, resetTestDevice } from "./device-fixtures";
 
 type ProviderRequest = {
@@ -131,11 +132,14 @@ async function settings(page: Page): Promise<ModelSettingsInfo> {
   return body.settings as ModelSettingsInfo;
 }
 
-test("personal model setup is tested before save, shared with paired devices and used with the fixed prompt", async ({
+test("the local owner uses its own model while paired devices receive only schedule access", async ({
   page,
   browser,
+  playwright,
+  baseURL,
 }) => {
   await page.setViewportSize({ width: 1440, height: 1200 });
+  expect((await page.request.post("/api/devices/web-session", { data: {} })).status()).toBe(200);
   await loadPage(page);
   let dialog = await openModelSettings(page);
   await dialog.getByLabel("Base URL", { exact: true }).fill(providerBase);
@@ -173,8 +177,7 @@ test("personal model setup is tested before save, shared with paired devices and
     fullPage: true,
   });
 
-  // A paired device shares this local space; an unpaired browser cannot
-  // retrieve metadata or use the saved model credential.
+  // Calendar pairing never grants access to this device's model or credential.
   const secondContext = await browser.newContext({
     baseURL: "http://localhost:3001",
     viewport: { width: 360, height: 800 },
@@ -183,15 +186,78 @@ test("personal model setup is tested before save, shared with paired devices and
   });
   const second = await secondContext.newPage();
   try {
-    await pairDevice(page.request, second.request);
+    const ticket = await (await page.request.post("/api/pairing/issue", { data: {} })).json();
+    const clientId = randomUUID();
+    const paired = await second.request.post("/api/pairing/redeem", { data: { token: ticket.token, device_id: clientId, device_name: "独立手机", platform: "android" } });
+    expect(paired.status()).toBe(200);
+    const credential = await paired.json();
+    const modelPolls: string[] = [];
+    second.on("request", request => { if (request.url().includes("/api/model-settings")) modelPolls.push(request.url()); });
     await loadPage(second);
-    const secondDialog = await openModelSettings(second);
-    await expect(
-      secondDialog.getByLabel("模型名称", { exact: true }),
-    ).toHaveValue("personal-model");
-    await expect(
-      secondDialog.getByLabel("API Key", { exact: true }),
-    ).toHaveValue("");
+    await expect(second.getByText("配对仅同步日程，请在本机应用使用智能整理。", { exact: true })).toBeVisible();
+    await expect(second.getByLabel("描述你的日程安排")).toHaveCount(0);
+    await expect(second.getByRole("button", { name: "一句话安排", exact: true })).toHaveCount(0);
+    await second.locator("header").getByRole("button", { name: "打开设备与同步", exact: true }).click();
+    await expect(second.getByRole("button", { name: "模型设置", exact: true })).toHaveCount(0);
+    await second.getByRole("dialog").getByRole("button", { name: "关闭弹窗", exact: true }).click();
+    await second.evaluate(() => window.dispatchEvent(new Event("focus")));
+    await expect(second.locator(".sync-badge")).toHaveText("连接正常");
+    expect(modelPolls).toHaveLength(0);
+    const native = await playwright.request.newContext({ baseURL, extraHTTPHeaders: { Authorization: `Bearer ${credential.device_token}` } });
+    try {
+      expect((await native.storageState()).cookies).toHaveLength(0);
+      expect((await (await page.request.get("/api/auth/session")).json()).ai_provider).toBe("model");
+      for (const client of [second.request, native]) {
+        for (const path of ["/api/auth/session", "/api/devices/info"]) {
+          const session = await (await client.get(path)).json();
+          expect(session.role).toBe("peer");
+          // This compatibility field stays constant; it reveals no host model state.
+          expect(session.ai_provider).toBe("rules");
+          expect(session.capabilities).toEqual({ replica: 1, web: false, ai: false });
+          expect(session.device.platform).toBe("windows");
+          expect(JSON.stringify(session)).not.toContain(providerBase);
+          expect(JSON.stringify(session)).not.toContain("personal-model");
+          expect(JSON.stringify(session)).not.toContain(key);
+        }
+        const modelInput = { base_version: saved.version, base_url: providerBase, model: "peer-attempt", api_key: key };
+        for (const [path, method, data] of [
+          ["/api/model-settings", "GET", undefined],
+          ["/api/model-settings", "PUT", modelInput],
+          ["/api/model-settings", "DELETE", { base_version: saved.version }],
+          ["/api/model-settings/test", "POST", modelInput],
+          ["/api/ai/parse", "POST", { text: "明天下午三点到四点面试" }],
+          ["/api/devices/web-session", "POST", {}],
+        ] as const) {
+          const forbidden = await client.fetch(path, { method, ...(data === undefined ? {} : { data }) });
+          expect(forbidden.status(), `${method} ${path}`).toBe(403);
+          const body = await forbidden.json();
+          expect(body.error.code).toBe("SYNC_ONLY_DEVICE");
+          expect(JSON.stringify(body)).not.toContain(key);
+          expect(JSON.stringify(body)).not.toContain(providerBase);
+          expect(forbidden.headers()["set-cookie"]).toBeUndefined();
+        }
+      }
+      expect(await settings(page)).toEqual(saved);
+      const id = randomUUID();
+      const head = createRevision({ baseHeads: [], revisionId: randomUUID(), author: "手机", changedAt: 1, payload: {
+        title: "手机独立整理后同步的日程", start_local: "2034-06-01T09:00:00", end_local: "2034-06-01T10:00:00", timezone: "Asia/Shanghai", status: "planned", deleted: false,
+      } });
+      const pushed = await native.post("/api/replica/exchange", { data: { device_id: clientId, records: [{ id, heads: [head] }] } });
+      expect(pushed.status()).toBe(200);
+      const event = (await (await second.request.get(`/api/events/${id}`)).json()).event;
+      expect(event.title).toBe(head.payload.title);
+      expect((await second.request.patch(`/api/events/${id}`, { data: { base_version: event.version, status: "completed" } })).status()).toBe(200);
+      const pulled = await second.request.post("/api/replica/exchange", { data: { device_id: clientId, records: [] } });
+      expect(pulled.status()).toBe(200);
+      for (const exchanged of [pushed, pulled]) {
+        const body = await exchanged.text();
+        expect(body).not.toContain(key);
+        expect(body).not.toContain(providerBase);
+        expect(body).not.toContain("personal-model");
+      }
+      expect((await (await native.get(`/api/events/${id}`)).json()).event.status).toBe("completed");
+    } finally { await native.dispose(); }
+    expect(requests).toHaveLength(1);
     expect(
       await second.evaluate(
         () => document.documentElement.scrollWidth <= innerWidth,

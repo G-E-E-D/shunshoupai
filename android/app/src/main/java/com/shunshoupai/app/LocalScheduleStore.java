@@ -27,7 +27,7 @@ final class LocalScheduleStore extends SQLiteOpenHelper {
     private final PersonalReplicaStore replica = new PersonalReplicaStore(this);
 
     LocalScheduleStore(Context context) { this(context,"schedule-offline.sqlite"); }
-    LocalScheduleStore(Context context,String databaseName) { super(context, databaseName, null, 4); this.context=context.getApplicationContext(); }
+    LocalScheduleStore(Context context,String databaseName) { super(context, databaseName, null, 5); this.context=context.getApplicationContext(); }
 
     @Override public void onCreate(SQLiteDatabase db) {
         db.execSQL("CREATE TABLE local_events(scope TEXT NOT NULL,id TEXT NOT NULL,payload TEXT NOT NULL,version INTEGER NOT NULL DEFAULT 0,dirty INTEGER NOT NULL DEFAULT 1,conflict TEXT,message TEXT,expected_base INTEGER,PRIMARY KEY(scope,id))");
@@ -36,12 +36,14 @@ final class LocalScheduleStore extends SQLiteOpenHelper {
         db.execSQL("CREATE TABLE metadata(key TEXT PRIMARY KEY,value TEXT NOT NULL)");
         createDeviceSchema(db);
         createReplicaSchema(db);
+        LocalDraftCommitter.createSchema(db);
     }
 
     @Override public void onUpgrade(SQLiteDatabase db, int oldVersion, int newVersion) {
         if(oldVersion<2)db.execSQL("ALTER TABLE local_events ADD COLUMN expected_base INTEGER");
         if(oldVersion<3)createDeviceSchema(db);
         if(oldVersion<4)createReplicaSchema(db);
+        if(oldVersion<5)LocalDraftCommitter.createSchema(db);
     }
 
     private void createReplicaSchema(SQLiteDatabase db){
@@ -123,6 +125,7 @@ final class LocalScheduleStore extends SQLiteOpenHelper {
     synchronized String primarySpaceId(){try(Cursor row=getReadableDatabase().rawQuery("SELECT space_id FROM spaces WHERE scope=?",new String[]{primaryScope()})){if(row.moveToFirst())return row.getString(0);}throw new IllegalStateException("Missing local primary dataset");}
     synchronized boolean isPrimary(String scope){return meta("primary_scope")!=null&&primaryScope().equals(canonicalScope(scope));}
     PersonalReplicaStore replica(){return replica;}
+    synchronized JSONArray commitDrafts(String scope, JSONArray drafts) throws JSONException { return LocalDraftCommitter.commit(this, scope, drafts); }
     synchronized int listenPort(){String port=meta("listen_port");return port==null?43127:Integer.parseInt(port);}
     synchronized void rememberListenPort(int port){getWritableDatabase().execSQL("INSERT OR REPLACE INTO metadata(key,value) VALUES('listen_port',?)",new Object[]{Integer.toString(port)});}
     synchronized String activeScope(){return canonicalScope(meta("active_scope"));}

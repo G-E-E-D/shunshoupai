@@ -5,6 +5,7 @@ on:
     branches: [main]
     paths:
       - 'desktop/**'
+      - 'desktop-java/**'
       - 'shared/**'
       - 'src/**'
       - 'public/**'
@@ -14,6 +15,7 @@ on:
   pull_request:
     paths:
       - 'desktop/**'
+      - 'desktop-java/**'
       - 'shared/**'
       - 'src/**'
       - 'public/**'
@@ -42,6 +44,12 @@ jobs:
         with:
           node-version: '24.18.0'
           cache: npm
+      - uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: '21'
+      - name: Build and package Java screen capture with bundled offline OCR
+        run: ./desktop-java/scripts/package.ps1
       - name: Prepare MSVC 2022 x64
         uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756 # v1
         with:
@@ -99,4 +107,5 @@ jobs:
             ${{ runner.temp }}/shunshoupai-installer-test/reports/
             desktop/build/native-tests.xml
             desktop/build/Testing/Temporary/LastTest.log
+            desktop-java/target/surefire-reports/
           if-no-files-found: ignore

@@ -1,0 +1,7 @@
+target/
+dist/
+.tools/
+.m2/
+.cache/
+resources/tessdata/*.traineddata
+*.log

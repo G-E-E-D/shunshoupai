@@ -69,6 +69,11 @@ qt_add_executable(Shunshoupai WIN32
     src/backend.h
     src/window.h
     src/window.cpp
+    src/java_capture_bridge.cpp
+    src/java_capture_bridge.h
+    src/java_capture_host.cpp
+    src/java_capture_state.h
+    src/java_capture_smoke.cpp
     src/dialogs.cpp
     src/design.cpp
     src/design.h
@@ -130,6 +135,13 @@ if(BUILD_TESTING)
         target_compile_options(DraftStateTest PRIVATE /utf-8 /W4)
     endif()
     add_test(NAME DraftState COMMAND DraftStateTest)
+    add_executable(JavaCaptureStateTest tests/java_capture_state_test.cpp)
+    target_include_directories(JavaCaptureStateTest PRIVATE src)
+    target_link_libraries(JavaCaptureStateTest PRIVATE Qt6::Core)
+    if(MSVC)
+        target_compile_options(JavaCaptureStateTest PRIVATE /utf-8 /W4)
+    endif()
+    add_test(NAME JavaCaptureState COMMAND JavaCaptureStateTest)
     add_executable(DeviceBootstrapTest src/session_cookies.cpp tests/device_bootstrap_test.cpp)
     target_include_directories(DeviceBootstrapTest PRIVATE src)
     target_link_libraries(DeviceBootstrapTest PRIVATE Qt6::Network)

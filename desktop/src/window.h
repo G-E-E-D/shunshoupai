@@ -15,6 +15,7 @@ class QComboBox;
 class QVBoxLayout;
 class QTimer;
 class ModernCalendarWidget;
+class JavaCaptureBridge;
 
 class MainWindow : public QMainWindow {
     ApiClient api;
@@ -37,6 +38,19 @@ class MainWindow : public QMainWindow {
     QString requestedDeviceName;
     QTimeZone zone{"Asia/Shanghai"};
     QDate currentDay;
+    JavaCaptureBridge *javaCapture = nullptr;
+    QLabel *captureHint = nullptr;
+    QPushButton *captureResumeButton = nullptr;
+    QJsonObject javaCaptureContext;
+    quint64 javaCaptureContextId = 0, javaCaptureStartEpoch = 0;
+    bool javaCaptureAutomatic = false, javaCaptureAttempted = false, javaCaptureReady = false, captureWindowHidden = false;
+    QString pendingJavaCommand, captureRequestId, javaCaptureRunId;
+    QString javaCaptureContextToken() const;
+    QString javaCaptureScope() const;
+    void setupJavaCapture(bool automatic);
+    void javaCaptureCommand(const QString &type);
+    void updateJavaCaptureContext(bool force = false);
+    void receiveJavaCapture(const QJsonObject &message);
     QString owner() const;
     void showError(const ApiResult &result);
     void setSession(const QJsonObject &data);
@@ -55,8 +69,10 @@ class MainWindow : public QMainWindow {
     void updateRecoveryButton();
 public:
     explicit MainWindow(const QString &origin, bool rememberSession = true, const QByteArray &bootstrapKey = {}, const QString &deviceName = {});
+    ~MainWindow() override;
     void initialize();
     int smokeTest(const QString &screenshot);
     int visualSmoke(const QString &directory);
+    int javaCaptureSmoke(const QString &directory);
     int peerSmoke(const QString &directory, bool resumed = false);
 };

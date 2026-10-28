@@ -40,7 +40,7 @@ export async function deviceCredential() {
 }
 export function deviceSession(grant: DeviceGrant): SessionInfo {
   return {
-    user: { id: grant.space_id, email: "" }, mode: "local", ai_provider: aiProvider(), local_first: true,
+    user: { id: grant.space_id, email: "" }, mode: "local", ai_provider: grant.role === "owner" ? aiProvider() : "rules", local_first: true,
     ...localStore().devices.context(), role: grant.role,
     peer: { id: grant.id, name: grant.name, platform: grant.platform }, pairing_limited: false, session_expires_at: null,
   };
@@ -49,12 +49,21 @@ export async function currentSession(): Promise<{ info: SessionInfo; supabase?: 
   storageMode();
   startPeerWorker();
   const grant = localStore().devices.authenticate(await deviceCredential());
-  return grant ? { info: deviceSession(grant), grant } : { info: { user: null, mode: "local", ai_provider: aiProvider(), local_first: true } };
+  return grant ? { info: deviceSession(grant), grant } : { info: { user: null, mode: "local", ai_provider: "rules", local_first: true } };
 }
 export async function requireAuth(): Promise<AuthContext> {
   const { info, grant } = await currentSession();
   if (!info.user || !grant) throw new AppError("UNAUTHORIZED", "请先扫描本机配对码，允许这台设备访问日程。", 401);
   return { user: info.user, mode: "local", grant };
+}
+// Pairing grants schedule access only. Model credentials and model calls stay local.
+export async function requireLocalFeature(): Promise<AuthContext> {
+  const auth = await requireAuth();
+  if (auth.grant?.role !== "owner") {
+    throw new AppError("SYNC_ONLY_DEVICE", "配对仅同步日程，请在本机应用配置模型和使用智能整理。", 403);
+  }
+  assertAuthActive(auth);
+  return auth;
 }
 export function assertAuthActive(auth: AuthContext) {
   if (!auth.grant) throw new AppError("UNAUTHORIZED", "设备授权已解除。", 401);

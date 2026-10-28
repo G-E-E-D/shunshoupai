@@ -11,7 +11,7 @@ const uuid = z.string().uuid();
 export const returnConnectionSchema = z.object({ origin: z.string().max(512), token: z.string().regex(/^[A-Za-z0-9_-]{43}$/), peer_id: uuid, space_id: uuid, public_key: z.string().max(512) }).strict();
 export const exchangeSchema = z.object({ device_id: uuid, records: z.array(replicaRecordSchema).max(50), after: uuid.optional() }).strict();
 const pageSchema = z.object({ peer_id: uuid, space_id: uuid, records: z.array(replicaRecordSchema).max(50), has_more: z.boolean(), next_cursor: uuid.nullable() });
-const proofSchema = z.object({ peer_id: uuid, space_id: uuid, device: z.object({ name: z.string().max(80) }), identity: z.object({ public_key: z.string().max(512), signature: z.string().max(256) }), capabilities: z.object({ web: z.boolean().optional() }).optional() });
+const proofSchema = z.object({ peer_id: uuid, space_id: uuid, device: z.object({ name: z.string().max(80), platform: z.enum(['android', 'windows', 'web', 'test']).optional() }), identity: z.object({ public_key: z.string().max(512), signature: z.string().max(256) }), capabilities: z.object({ web: z.boolean().optional() }).optional() });
 const MAX_CURSOR = "ffffffff-ffff-ffff-ffff-ffffffffffff";
 
 export function peerOrigin(value: string): string {
@@ -87,7 +87,7 @@ export async function connectPeer(store: LocalStore, link: string, localOrigin?:
   if (proof.peer_id === local.peer_id) throw new AppError('SELF_PAIRING', '这是本机配对码，请在另一台设备扫描。', 400);
   const pinned = store.peers.pin(proof.peer_id);
   if (pinned && pinned !== proof.identity.public_key) throw new AppError('PEER_IDENTITY_CHANGED', '设备身份已改变，请核对目标设备。', 409);
-  const callback = localOrigin ? store.devices.callbackGrant(proof.peer_id, proof.device.name, proof.capabilities?.web === false ? 'android' : 'windows') : undefined;
+  const callback = localOrigin ? store.devices.callbackGrant(proof.peer_id, proof.device.name, proof.device.platform ?? (proof.capabilities?.web === false ? 'android' : 'windows')) : undefined;
   try {
     const data = await request(origin, '/api/pairing/redeem', {
       token, device_id: local.peer_id, device_name: local.device.name, platform: 'windows',

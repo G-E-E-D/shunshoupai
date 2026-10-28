@@ -42,6 +42,13 @@
     ".next/dev/types",
     "desktop/**",
     "android/**",
-    "artifacts/**"
+    "artifacts/**",
+    "tmp/**",
+    "output/**",
+    ".codex-remote-attachments/**",
+    "backend/.cache/**",
+    "backend/.gopath/**",
+    "backend/bin/**",
+    "desktop-java/target/**"
   ]
 }

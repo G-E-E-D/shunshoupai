@@ -54,6 +54,8 @@ test('real HTTP reciprocal pairing merges two primary calendars and both can ini
     const qr=a.store.devices.issue(a.owner.grant);
     await connectPeer(b.store,`${a.origin}/#pair=${qr.token}`,b.origin);
     assert.equal(a.store.peers.list().length,1);assert.equal(b.store.peers.list().length,1);
+    // A Windows host also advertises sync-only capabilities; platform is explicit.
+    assert.equal(b.store.devices.list(b.owner.grant).devices.find(device=>device.client_id===a.store.devices.context().peer_id)?.platform,'windows');
     await syncPeer(b.store,b.store.peers.all()[0]);
     assert.equal(a.store.event(a.space,eb.id).title,'离线手机安排');assert.equal(b.store.event(b.space,ea.id).title,draft.title);
     a.store.mutate(a.space,ea.id,a.store.event(a.space,ea.id).version,{title:'电脑新修改'});

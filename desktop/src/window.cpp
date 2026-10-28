@@ -1,4 +1,5 @@
 #include "window.h"
+#include "java_capture_state.h"
 #include "design.h"
 #include "modern_calendar.h"
 #include "qrcodegen.hpp"
@@ -166,7 +167,13 @@ MainWindow::MainWindow(const QString &origin, bool rememberSession, const QByteA
     create->setObjectName("tonalButton");
     create->setIcon(Design::icon("plus", QColor("#041e49"))); create->setIconSize(QSize(24, 24));
     create->setMinimumHeight(52);
-    side->addWidget(create, 0, Qt::AlignLeft);
+    auto *captureActions = new QHBoxLayout;
+    create->setMinimumHeight(40); captureActions->addWidget(create);
+    auto *capture = button(trText("截图")); capture->setObjectName("captureStart"); capture->setToolTip(trText("Ctrl+Alt+S · Java 本机截图整理")); captureActions->addWidget(capture);
+    auto *captureSettings = button(""); captureSettings->setObjectName("iconButton"); captureSettings->setFixedSize(32, 36); captureSettings->setIcon(Design::icon("settings")); captureSettings->setToolTip(trText("截图与悬浮按钮设置")); captureSettings->setAccessibleName(trText("截图与悬浮按钮设置")); captureActions->addWidget(captureSettings);
+    side->addLayout(captureActions);
+    captureHint = label(trText("Ctrl+Alt+S 框选文字 · 本机识别"), "fieldHint"); side->addWidget(captureHint);
+    captureResumeButton = button(trText("继续识别文字")); captureResumeButton->setObjectName("captureResume"); captureResumeButton->hide(); side->addWidget(captureResumeButton);
     currentDay = QDateTime::currentDateTimeUtc().toTimeZone(zone).date();
     miniCalendar = new ModernCalendarWidget;
     miniCalendar->setCompact(true);
@@ -268,12 +275,19 @@ MainWindow::MainWindow(const QString &origin, bool rememberSession, const QByteA
     connect(phoneButton, &QPushButton::clicked, this, [this] { if (owner().isEmpty()) connection(); else phone(); });
     connect(service, &QPushButton::clicked, this, &MainWindow::connection);
     connect(create, &QPushButton::clicked, this, [this] { editEvent(); });
+    connect(capture, &QPushButton::clicked, this, [this] { javaCaptureCommand("capture"); });
+    connect(captureSettings, &QPushButton::clicked, this, [this] { javaCaptureCommand("settings"); });
+    connect(captureResumeButton, &QPushButton::clicked, this, [this] { javaCaptureCommand("show-review"); });
     connect(parseButton, &QPushButton::clicked, this, &MainWindow::parse);
     auto *quickParse = new QShortcut(QKeySequence(Qt::CTRL | Qt::Key_Return), composer);
     quickParse->setContext(Qt::WidgetShortcut);
     connect(quickParse, &QShortcut::activated, parseButton, &QPushButton::click);
     connect(composer, &QTextEdit::textChanged, this, [this] {
-        if (!owner().isEmpty()) settings.setValue("composer/" + pendingKey(api.origin, owner()), composer->toPlainText());
+        if (!owner().isEmpty()) {
+            settings.setValue("composer/" + pendingKey(api.origin, owner()), composer->toPlainText());
+            JavaCaptureState::edit(settings, javaCaptureScope(), composer->toPlainText());
+        }
+        updateJavaCaptureContext();
     });
     connect(example, &QPushButton::clicked, this, [this] { composer->setPlainText(trText("明天下午三点到四点面试，今天晚上七点到八点改简历，八点到九点准备面试。")); });
     connect(resume, &QPushButton::clicked, this, &MainWindow::restorePending);
@@ -300,6 +314,7 @@ MainWindow::MainWindow(const QString &origin, bool rememberSession, const QByteA
         if (state == Qt::ApplicationActive) QTimer::singleShot(0, this, [this] { if (!api.busy() && !QApplication::activeModalWidget()) refresh(); });
     });
     poll->start(); modelButton->setEnabled(false); phoneButton->setEnabled(false);
+    setupJavaCapture(rememberSession);
 }
 
 QString MainWindow::owner() const { return session.value("user").toObject().value("id").toString(); }
@@ -324,10 +339,11 @@ void MainWindow::setSession(const QJsonObject &data) {
         const QSignalBlocker blocked(composer);
         if (!previousOwner.isEmpty()) composer->clear();
         if (!owner().isEmpty() && composer->toPlainText().isEmpty())
-            composer->setPlainText(settings.value("composer/" + pendingKey(api.origin, owner())).toString());
+            composer->setPlainText(JavaCaptureState::text(settings, javaCaptureScope(), settings.value("composer/" + pendingKey(api.origin, owner())).toString()));
         if (!owner().isEmpty()) settings.setValue("composer/" + pendingKey(api.origin, owner()), composer->toPlainText());
     }
     renderEvents();
+    updateJavaCaptureContext();
 }
 void MainWindow::initialize() {
     QJsonObject bootstrap{{"name", (requestedDeviceName.isEmpty() ? QSysInfo::machineHostName() : requestedDeviceName).left(60)}, {"platform", "windows"}};

@@ -26,8 +26,12 @@ $standalone = Join-Path $repoRoot '.next\standalone'
 if (!(Test-Path -LiteralPath (Join-Path $standalone 'server.js'))) { throw 'Run npm run build with output: standalone first.' }
 $backendVersion = (Get-Content -LiteralPath (Join-Path $standalone 'package.json') -Raw | ConvertFrom-Json).version
 if ($backendVersion -ne $version) { throw "Bundled backend version $backendVersion does not match package.json $version. Run npm run build again." }
+$captureImage = Join-Path $repoRoot 'desktop-java\dist\ShunshoupaiCapture'
+if (!(Test-Path -LiteralPath (Join-Path $captureImage 'ShunshoupaiCapture.exe'))) { throw 'Build desktop-java/scripts/package.ps1 before creating the installer.' }
+if ((Get-Content -LiteralPath (Join-Path $captureImage 'version.txt') -Raw).Trim() -ne $version) { throw 'Java capture image version does not match package.json.' }
 New-Item -ItemType Directory -Path $StageDir, $OutputDir -Force | Out-Null
 Copy-Item -LiteralPath $app -Destination (Join-Path $StageDir 'Shunshoupai.exe')
+Copy-Item -LiteralPath $captureImage -Destination (Join-Path $StageDir 'capture-java') -Recurse
 & $Windeployqt --release --compiler-runtime --no-translations --no-opengl-sw --no-system-d3d-compiler --dir $StageDir (Join-Path $StageDir 'Shunshoupai.exe')
 if ($LASTEXITCODE -ne 0) { throw 'windeployqt failed.' }
 

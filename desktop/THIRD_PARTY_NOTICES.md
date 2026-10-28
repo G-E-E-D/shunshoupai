@@ -32,3 +32,9 @@ build scripts: https://github.com/G-E-E-D/shunshoupai .
 The Microsoft Visual C++ runtime DLLs are redistributed app-locally under the
 Microsoft Visual Studio redistribution terms. No system-wide runtime installer
 or administrator permission is needed.
+
+The Java capture helper is bundled under `capture-java/`, including Eclipse
+Temurin, Tess4J/Tesseract, Leptonica, JNA, and Chinese/English OCR models. Its
+complete notices and license locations are documented in
+`capture-java/THIRD_PARTY_NOTICES.md`; source and pinned build inputs are in the
+repository's `desktop-java/` directory.

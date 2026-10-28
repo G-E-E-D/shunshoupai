@@ -7,7 +7,7 @@ export const dynamic = "force-dynamic";
 export async function GET() {
   return handle(async () => {
     const { info, supabase } = await currentSession();
-    if (!info.user) return info;
+    if (!info.user || info.role !== "owner") return info;
     const settings = await getModelSettingsInfo({
       user: info.user,
       mode: info.mode,

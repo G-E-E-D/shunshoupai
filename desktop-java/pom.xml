@@ -1,0 +1,47 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+  <modelVersion>4.0.0</modelVersion>
+  <groupId>com.shunshoupai</groupId>
+  <artifactId>shunshoupai-capture</artifactId>
+  <!-- scripts/build.ps1 passes the root package.json version as -Drevision. -->
+  <version>${revision}</version>
+  <properties>
+    <revision>0.0.0-SNAPSHOT</revision>
+    <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+    <project.reporting.outputEncoding>UTF-8</project.reporting.outputEncoding>
+    <maven.compiler.release>17</maven.compiler.release>
+    <project.build.outputTimestamp>2026-10-28T00:00:00Z</project.build.outputTimestamp>
+    <jna.version>5.19.1</jna.version>
+  </properties>
+  <dependencies>
+    <dependency><groupId>net.java.dev.jna</groupId><artifactId>jna</artifactId><version>${jna.version}</version></dependency>
+    <dependency><groupId>net.java.dev.jna</groupId><artifactId>jna-platform</artifactId><version>${jna.version}</version></dependency>
+    <dependency><groupId>net.sourceforge.tess4j</groupId><artifactId>tess4j</artifactId><version>5.20.0</version></dependency>
+    <dependency><groupId>com.google.code.gson</groupId><artifactId>gson</artifactId><version>2.13.2</version></dependency>
+    <dependency><groupId>org.junit.jupiter</groupId><artifactId>junit-jupiter</artifactId><version>5.11.4</version><scope>test</scope></dependency>
+    <dependency><groupId>org.junit.platform</groupId><artifactId>junit-platform-launcher</artifactId><version>1.11.4</version><scope>test</scope></dependency>
+    <!-- Keep third-party OCR diagnostics off the JSONL protocol's stdout. -->
+    <dependency><groupId>org.slf4j</groupId><artifactId>slf4j-nop</artifactId><version>2.0.18</version><scope>runtime</scope></dependency>
+  </dependencies>
+  <build>
+    <finalName>shunshoupai-capture</finalName>
+    <plugins>
+      <plugin><groupId>org.apache.maven.plugins</groupId><artifactId>maven-clean-plugin</artifactId><version>3.4.1</version></plugin>
+      <plugin><groupId>org.apache.maven.plugins</groupId><artifactId>maven-resources-plugin</artifactId><version>3.3.1</version></plugin>
+      <plugin><groupId>org.apache.maven.plugins</groupId><artifactId>maven-compiler-plugin</artifactId><version>3.14.1</version></plugin>
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId><artifactId>maven-surefire-plugin</artifactId><version>3.5.4</version>
+        <configuration><useModulePath>false</useModulePath><systemPropertyVariables><shunshoupai.models>${project.basedir}/.tools/tessdata</shunshoupai.models><shunshoupai.version>${project.version}</shunshoupai.version></systemPropertyVariables></configuration>
+      </plugin>
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId><artifactId>maven-jar-plugin</artifactId><version>3.4.2</version>
+        <configuration><archive><manifest><mainClass>com.shunshoupai.capture.Main</mainClass><addClasspath>true</addClasspath><classpathPrefix>lib/</classpathPrefix></manifest><manifestEntries><Implementation-Version>${project.version}</Implementation-Version></manifestEntries></archive></configuration>
+      </plugin>
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId><artifactId>maven-dependency-plugin</artifactId><version>3.8.1</version>
+        <executions><execution><id>runtime-dependencies</id><phase>package</phase><goals><goal>copy-dependencies</goal></goals><configuration><includeScope>runtime</includeScope><outputDirectory>${project.build.directory}/lib</outputDirectory></configuration></execution></executions>
+      </plugin>
+    </plugins>
+  </build>
+</project>
