@@ -1,10 +1,11 @@
 cmake_minimum_required(VERSION 3.21)
 file(READ "${CMAKE_CURRENT_SOURCE_DIR}/../package.json" SHUNSHOUPAI_PACKAGE_JSON)
 string(JSON SHUNSHOUPAI_PACKAGE_VERSION GET "${SHUNSHOUPAI_PACKAGE_JSON}" version)
-if(NOT SHUNSHOUPAI_PACKAGE_VERSION MATCHES "^[0-9]+\\.[0-9]+\\.[0-9]+$")
-    message(FATAL_ERROR "package.json must contain a numeric x.y.z version for Windows resources")
+if(NOT SHUNSHOUPAI_PACKAGE_VERSION MATCHES "^([0-9]+\\.[0-9]+\\.[0-9]+)(-beta\\.[0-9]+)?$")
+    message(FATAL_ERROR "package.json must contain x.y.z or x.y.z-beta.n")
 endif()
-project(Shunshoupai VERSION ${SHUNSHOUPAI_PACKAGE_VERSION} LANGUAGES CXX)
+set(SHUNSHOUPAI_NUMERIC_VERSION "${CMAKE_MATCH_1}")
+project(Shunshoupai VERSION ${SHUNSHOUPAI_NUMERIC_VERSION} LANGUAGES CXX)
 set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/../package.json")
 
 set(CMAKE_CXX_STANDARD 17)
@@ -90,7 +91,7 @@ if(WIN32)
     target_link_libraries(Shunshoupai PRIVATE crypt32)
 endif()
 target_compile_definitions(Shunshoupai PRIVATE
-    SHUNSHOUPAI_VERSION="${PROJECT_VERSION}"
+    SHUNSHOUPAI_VERSION="${SHUNSHOUPAI_PACKAGE_VERSION}"
 )
 if(MSVC)
     target_compile_options(Shunshoupai PRIVATE /utf-8 /W4)
@@ -103,7 +104,7 @@ install(TARGETS Shunshoupai RUNTIME DESTINATION .)
 include(CTest)
 if(BUILD_TESTING)
     add_test(NAME AppVersion COMMAND Shunshoupai --version)
-    set_tests_properties(AppVersion PROPERTIES PASS_REGULAR_EXPRESSION "Shunshoupai ${PROJECT_VERSION}")
+    set_tests_properties(AppVersion PROPERTIES PASS_REGULAR_EXPRESSION "Shunshoupai ${SHUNSHOUPAI_PACKAGE_VERSION}")
     add_executable(ConnectionCoreTest
         ../shared/core/connection.cpp
         ../shared/core/connection_test.cpp
@@ -133,7 +134,7 @@ if(BUILD_TESTING)
     add_executable(DeviceBootstrapTest src/session_cookies.cpp tests/device_bootstrap_test.cpp)
     target_include_directories(DeviceBootstrapTest PRIVATE src)
     target_link_libraries(DeviceBootstrapTest PRIVATE Qt6::Network)
-    target_compile_definitions(DeviceBootstrapTest PRIVATE SHUNSHOUPAI_VERSION="${PROJECT_VERSION}")
+    target_compile_definitions(DeviceBootstrapTest PRIVATE SHUNSHOUPAI_VERSION="${SHUNSHOUPAI_PACKAGE_VERSION}")
     if(WIN32)
         target_link_libraries(DeviceBootstrapTest PRIVATE crypt32)
     endif()

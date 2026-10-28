@@ -1,10 +1,7 @@
-import { connection } from "next/server";
-import Dashboard from "@/components/dashboard";
-import { shanghaiDay } from "@/lib/client";
+import MobileWorkbench from "@/components/mobile-workbench";
 
 // The installed Android client has an explicit route. WebView vendors may
 // replace the User-Agent; rendering must never depend on a vendor-specific UA.
-export default async function MobileWorkbench() {
-  await connection();
-  return <Dashboard initialDay={shanghaiDay()} />;
+export default function MobilePage() {
+  return <MobileWorkbench />;
 }

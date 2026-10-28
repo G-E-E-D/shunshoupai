@@ -1,12 +1,12 @@
-# Windows 原生桌面端（v2.0.0）
+# Windows 原生桌面端（v2.1.0-beta.1）
 
 桌面使用 C++17 / Qt 6 Widgets 和 Qt Network，不嵌入浏览器。安装后打开即可使用本机日程，无需注册、登录或维持账号会话。
 
-[Windows 安装器](https://github.com/G-E-E-D/shunshoupai/releases/download/v2.0.0/shunshoupai-desktop-v2.0.0-setup.exe) · [发布页](https://github.com/G-E-E-D/shunshoupai/releases/tag/v2.0.0)
+[Windows 安装器](https://github.com/G-E-E-D/shunshoupai/releases/download/v2.1.0-beta.1/shunshoupai-desktop-v2.1.0-beta.1-setup.exe) · [发布页](https://github.com/G-E-E-D/shunshoupai/releases/tag/v2.1.0-beta.1)
 
 ## 安装与数据
 
-安装器为当前 Windows 用户安装，包含 Qt 动态库、Node.js 和 SQLite 后端。启动时自动生成本机授权并启动服务；授权不根据 Host、Origin 或客户端名称放行。桌面访问 `127.0.0.1:43127`，手机通过可信局域网访问电脑。退出桌面会结束由本次应用启动的服务；手机仍可独立使用。
+安装器为当前 Windows 用户安装，包含 Qt 动态库、Go 服务、SQLite 与静态界面。启动时自动生成本机授权并启动服务；授权不根据 Host、Origin 或客户端名称放行。桌面访问 `127.0.0.1:43127`，手机通过可信局域网访问电脑。退出桌面会结束由本次应用启动的服务；手机仍可独立使用。
 
 数据库位于 `%LOCALAPPDATA%/Shunshoupai/data/app.sqlite`，模型加密主密钥为同目录的 `model-encryption.key`。备份应先关闭服务或使用一致性备份，并保留数据库和密钥文件；未提交草稿保存在当前 Windows 用户的应用设置中，完整备份也应保留这些设置。升级、重装和卸载保留电脑用户数据，手工删除数据则不会保留。
 
@@ -26,7 +26,7 @@ Windows 设备授权 Cookie 使用当前系统用户的 DPAPI 加密。它是本
 
 ## 源码构建与本机授权
 
-需要 Node.js 24、Qt 6.8+ Widgets/Network、CMake 3.21+ 和支持 C++20 的编译器。主应用使用 C++17，ZXing 二维码桥需要 C++20。设好 Qt 的 `CMAKE_PREFIX_PATH` 后：
+需要 Node.js 24、Go 1.26+、Qt 6.8+ Widgets/Network、CMake 3.21+ 和支持 C++20 的编译器。主应用使用 C++17，ZXing 二维码桥需要 C++20。设好 Qt 的 `CMAKE_PREFIX_PATH` 后：
 
 ```sh
 npm ci
@@ -35,18 +35,18 @@ cmake --build desktop/build --config Release
 ctest --test-dir desktop/build -C Release --output-on-failure
 ```
 
-源码开发需生成至少 32 字符的随机 `APP_DEVICE_BOOTSTRAP_KEY`，将**同一个值**只传给本机 Node 进程和 Qt `--backend` 进程。下面在项目根目录的同一 PowerShell 会话中启动两者；可执行文件路径以 MSVC Release 构建为例：
+源码开发需生成至少 32 字符的随机 `APP_DEVICE_BOOTSTRAP_KEY`，将**同一个值**只传给本机 Go 进程和 Qt `--backend` 进程。下面在项目根目录的同一 PowerShell 会话中启动两者；可执行文件路径以 MSVC Release 构建为例：
 
 ```powershell
 $env:APP_STORAGE = 'local'
 $env:APP_DEVICE_BOOTSTRAP_KEY = node -e "process.stdout.write(require('node:crypto').randomBytes(32).toString('base64url'))"
-$devServer = Start-Process -FilePath (Get-Command node).Source -ArgumentList @('node_modules/next/dist/bin/next', 'dev', '--hostname', '0.0.0.0', '--port', '3000') -WindowStyle Hidden -PassThru
+$devServer = Start-Process -FilePath '.\backend\bin\shunshoupai-server.exe' -ArgumentList @('--web', 'out', '--host', '0.0.0.0', '--port', '3000') -WindowStyle Hidden -PassThru
 .\desktop\build\Release\Shunshoupai.exe --backend http://127.0.0.1:3000
 ```
 
-Qt 仅向指定的 **IP 字面量环回地址**发送此密钥，例如 `127.0.0.1` 或 `::1`；不要用 `localhost`、局域网地址或公网地址代替此开发入口。不要把密钥写进 URL、命令行参数、浏览器或仓库。这个源码 Node 进程由开发者自行管理，Qt `--backend` 不会代为停止它。
+Qt 仅向指定的 **IP 字面量环回地址**发送此密钥，例如 `127.0.0.1` 或 `::1`；不要用 `localhost`、局域网地址或公网地址代替此开发入口。不要把密钥写进 URL、命令行参数、浏览器或仓库。这个源码 Go 进程由开发者自行管理，Qt `--backend` 不会代为停止它。
 
-安装版自动生成并传递授权密钥，不需要上述环境配置。默认不带 `--backend` 的启动依赖安装布局：主程序旁有 `runtime/node.exe` 和 `resources/backend/server.js`。
+安装版自动生成并传递授权密钥，不需要上述环境配置。默认不带 `--backend` 的启动依赖安装布局：主程序旁有 `resources/backend/shunshoupai-server.exe` 和 `resources/web/`。
 
 ## 生成安装器与验证
 

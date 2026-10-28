@@ -11,12 +11,12 @@ New-Item -ItemType Directory -Path $TestRoot | Out-Null
 $backend = $null
 $application = $null
 $saved = @{}
-foreach ($name in @('NODE_ENV','HOSTNAME','PORT','APP_STORAGE','APP_DB_PATH','AI_API_KEY','APP_ORIGIN','COOKIE_SECURE','MODEL_SETTINGS_ENCRYPTION_KEY','LOCALAPPDATA','APP_DEVICE_BOOTSTRAP_KEY')) {
+foreach ($name in @('NODE_ENV','HOSTNAME','APP_WEB_DIR','APP_LISTEN_HOST','PORT','APP_STORAGE','APP_DB_PATH','AI_API_KEY','APP_ORIGIN','COOKIE_SECURE','MODEL_SETTINGS_ENCRYPTION_KEY','LOCALAPPDATA','APP_DEVICE_BOOTSTRAP_KEY')) {
     $saved[$name] = [Environment]::GetEnvironmentVariable($name, 'Process')
 }
 try {
     $env:NODE_ENV = 'production'
-    $env:HOSTNAME = '127.0.0.1'
+    $env:APP_LISTEN_HOST = '127.0.0.1'
     $env:PORT = '43129'
     $env:APP_STORAGE = 'local'
     $env:APP_DB_PATH = Join-Path $TestRoot 'test.sqlite'
@@ -26,8 +26,8 @@ try {
     $env:MODEL_SETTINGS_ENCRYPTION_KEY = ''
     $env:APP_DEVICE_BOOTSTRAP_KEY = [Convert]::ToBase64String([Security.Cryptography.RandomNumberGenerator]::GetBytes(32)).TrimEnd('=').Replace('+','-').Replace('/','_')
     $env:LOCALAPPDATA = Join-Path $TestRoot 'localappdata'
-    $serverScript = '"' + (Join-Path $AppDirectory 'resources\backend\server.js') + '"'
-    $backend = Start-Process -FilePath (Join-Path $AppDirectory 'runtime\node.exe') -ArgumentList $serverScript -WorkingDirectory $TestRoot -WindowStyle Hidden -PassThru -RedirectStandardOutput (Join-Path $TestRoot 'backend.log') -RedirectStandardError (Join-Path $TestRoot 'backend-error.log')
+    $serverScript = '"' + (Join-Path $AppDirectory 'resources\web') + '"'
+    $backend = Start-Process -FilePath (Join-Path $AppDirectory 'resources\backend\shunshoupai-server.exe') -ArgumentList @('--web', $serverScript) -WorkingDirectory $TestRoot -WindowStyle Hidden -PassThru -RedirectStandardOutput (Join-Path $TestRoot 'backend.log') -RedirectStandardError (Join-Path $TestRoot 'backend-error.log')
     $ready = $false
     for ($attempt = 0; $attempt -lt 60; $attempt++) {
         if ($backend.HasExited) { throw "Backend exited ($($backend.ExitCode))." }

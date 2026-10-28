@@ -15,7 +15,7 @@ $installDirectory = Join-Path $TestRoot 'installed app'
 $reports = New-Item -ItemType Directory -Path (Join-Path $TestRoot 'reports')
 $isolatedData = New-Item -ItemType Directory -Path (Join-Path $TestRoot 'user-data')
 $savedEnvironment = @{}
-foreach ($name in @('NODE_ENV','HOSTNAME','PORT','APP_STORAGE','APP_DB_PATH','APP_ORIGIN','COOKIE_SECURE','AI_API_KEY','AI_BASE_URL','AI_MODEL','MODEL_SETTINGS_ENCRYPTION_KEY','LOCALAPPDATA','APP_DEVICE_BOOTSTRAP_KEY')) {
+foreach ($name in @('NODE_ENV','HOSTNAME','APP_WEB_DIR','APP_LISTEN_HOST','PORT','APP_STORAGE','APP_DB_PATH','APP_ORIGIN','COOKIE_SECURE','AI_API_KEY','AI_BASE_URL','AI_MODEL','MODEL_SETTINGS_ENCRYPTION_KEY','LOCALAPPDATA','APP_DEVICE_BOOTSTRAP_KEY')) {
     $savedEnvironment[$name] = [Environment]::GetEnvironmentVariable($name, 'Process')
 }
 $backend = $null
@@ -38,13 +38,13 @@ function Run-Installer {
 }
 try {
     Run-Installer
-    foreach ($relative in @('Shunshoupai.exe','runtime\node.exe','resources\backend\server.js','Qt6Core.dll','Qt6Widgets.dll','Qt6Network.dll','platforms\qwindows.dll','licenses\Qt\LGPL-3.0-only.txt')) {
+    foreach ($relative in @('Shunshoupai.exe','resources\backend\shunshoupai-server.exe','resources\web\mobile\index.html','Qt6Core.dll','Qt6Widgets.dll','Qt6Network.dll','platforms\qwindows.dll','licenses\Qt\LGPL-3.0-only.txt')) {
         if (!(Test-Path -LiteralPath (Join-Path $installDirectory $relative))) { throw "Installer payload is missing $relative." }
     }
     if ((Get-Item -LiteralPath (Join-Path $installDirectory 'Shunshoupai.exe')).VersionInfo.ProductVersion -ne $expectedVersion) { throw 'Installed application version does not match the release.' }
     if ((Get-Content -LiteralPath (Join-Path $installDirectory 'resources\backend\package.json') -Raw | ConvertFrom-Json).version -ne $expectedVersion) { throw 'Installed backend version does not match the release.' }
     $env:NODE_ENV = 'production'
-    $env:HOSTNAME = '127.0.0.1'
+    $env:APP_LISTEN_HOST = '127.0.0.1'
     $env:PORT = '43129'
     $env:APP_STORAGE = 'local'
     $env:APP_DB_PATH = Join-Path $isolatedData.FullName 'smoke.sqlite'
@@ -56,7 +56,7 @@ try {
     $env:MODEL_SETTINGS_ENCRYPTION_KEY = ''
     $env:APP_DEVICE_BOOTSTRAP_KEY = [Convert]::ToBase64String([Security.Cryptography.RandomNumberGenerator]::GetBytes(32)).TrimEnd('=').Replace('+','-').Replace('/','_')
     $env:LOCALAPPDATA = $isolatedData.FullName
-    $backend = Start-Process -FilePath (Join-Path $installDirectory 'runtime\node.exe') -ArgumentList @('"' + (Join-Path $installDirectory 'resources\backend\server.js') + '"') -WorkingDirectory $isolatedData.FullName -WindowStyle Hidden -PassThru -RedirectStandardOutput (Join-Path $reports.FullName 'backend.log') -RedirectStandardError (Join-Path $reports.FullName 'backend-error.log')
+    $backend = Start-Process -FilePath (Join-Path $installDirectory 'resources\backend\shunshoupai-server.exe') -ArgumentList @('--web', ('"' + (Join-Path $installDirectory 'resources\web') + '"')) -WorkingDirectory $isolatedData.FullName -WindowStyle Hidden -PassThru -RedirectStandardOutput (Join-Path $reports.FullName 'backend.log') -RedirectStandardError (Join-Path $reports.FullName 'backend-error.log')
     Wait-ForApi 'http://127.0.0.1:43129' $backend
     $screenshot = Join-Path $reports.FullName 'native-desktop.png'
     $application = Start-Process -FilePath (Join-Path $installDirectory 'Shunshoupai.exe') -ArgumentList @('--smoke-test','--backend','http://127.0.0.1:43129','--screenshot',('"' + $screenshot + '"')) -WorkingDirectory $installDirectory -WindowStyle Hidden -PassThru -RedirectStandardOutput (Join-Path $reports.FullName 'native.log') -RedirectStandardError (Join-Path $reports.FullName 'native-error.log')
@@ -72,7 +72,7 @@ try {
     & (Join-Path $PSScriptRoot 'test-peers.ps1') -AppDirectory $installDirectory -TestRoot (Join-Path $isolatedData.FullName 'peer-tests') -ReportDirectory (Join-Path $reports.FullName 'peers')
 
     # Also exercise the ordinary user launch path: the Qt program must start and
-    # later stop its own bundled Node, with data outside the installation folder.
+    # later stop its own bundled Go service, with data outside the installation folder.
     $application = Start-Process -FilePath (Join-Path $installDirectory 'Shunshoupai.exe') -WorkingDirectory $installDirectory -WindowStyle Hidden -PassThru
     Wait-ForApi 'http://127.0.0.1:43127' $application
     $expectedDatabase = Join-Path $isolatedData.FullName 'Shunshoupai\data\app.sqlite'
@@ -82,7 +82,7 @@ try {
     $probe = "const {DatabaseSync}=require('node:sqlite');const db=new DatabaseSync(process.argv[1],{readOnly:true});const ready=db.prepare('SELECT COUNT(*) AS n FROM local_device').get().n===1;db.close();process.exit(ready?0:1)"
     $localDeviceReady = $false
     for ($attempt = 0; $attempt -lt 20; $attempt++) {
-        & (Join-Path $installDirectory 'runtime\node.exe') -e $probe $expectedDatabase *> $null
+        & node -e $probe $expectedDatabase *> $null
         if ($LASTEXITCODE -eq 0) { $localDeviceReady = $true; break }
         Start-Sleep -Milliseconds 250
     }
@@ -100,7 +100,7 @@ try {
         if (!$listener) { break }
         Start-Sleep -Milliseconds 250
     }
-    if ($listener) { throw 'The bundled Node API remained running after its Qt owner exited.' }
+    if ($listener) { throw 'The bundled Go service API remained running after its Qt owner exited.' }
     $credentialFiles = @(Get-ChildItem -LiteralPath (Join-Path $isolatedData.FullName 'Shunshoupai\sessions') -Filter '*.bin' -File -ErrorAction SilentlyContinue)
     if ($credentialFiles.Count -eq 0) { throw 'Normal launch did not persist its protected device credential.' }
     $databaseHash = (Get-FileHash -LiteralPath $expectedDatabase -Algorithm SHA256).Hash
@@ -118,7 +118,7 @@ try {
     if (Test-Path -LiteralPath (Join-Path $installDirectory 'Shunshoupai.exe')) { throw 'Uninstallation did not remove the installed app.' }
     if (!(Test-Path -LiteralPath $expectedDatabase) -or (Get-FileHash -LiteralPath $expectedDatabase -Algorithm SHA256).Hash -ne $databaseHash) { throw 'Uninstall did not preserve user data.' }
     if (!(Test-Path -LiteralPath $keyFile) -or (Get-FileHash -LiteralPath $keyFile -Algorithm SHA256).Hash -ne $keyHash) { throw 'Uninstall did not preserve the model encryption key.' }
-    Set-Content -LiteralPath (Join-Path $reports.FullName 'result.txt') -Encoding utf8 -Value 'PASS: silent install; distributed Node/Qt; native API and widgets; default launch privately bootstraps a local device, denies unpaired access, and persists protected credentials; backend shutdown; reinstall/uninstall preserve user database and model encryption key.'
+    Set-Content -LiteralPath (Join-Path $reports.FullName 'result.txt') -Encoding utf8 -Value 'PASS: silent install; distributed Go/Qt; native API and widgets; default launch privately bootstraps a local device, denies unpaired access, and persists protected credentials; backend shutdown; reinstall/uninstall preserve user database and model encryption key.'
 } finally {
     foreach ($process in @($application, $backend)) {
         if ($process -and !$process.HasExited) { Stop-Process -Id $process.Id -ErrorAction SilentlyContinue }

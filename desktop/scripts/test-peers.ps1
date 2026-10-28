@@ -13,17 +13,17 @@ $ReportDirectory = [IO.Path]::GetFullPath($ReportDirectory)
 if (Test-Path -LiteralPath $ReportDirectory) { throw 'Peer ReportDirectory must be new.' }
 New-Item -ItemType Directory -Path $TestRoot, $ReportDirectory, (Join-Path $TestRoot 'first'), (Join-Path $TestRoot 'second') -Force | Out-Null
 $saved = @{}
-foreach ($name in @('NODE_ENV','HOSTNAME','PORT','APP_STORAGE','APP_DB_PATH','AI_API_KEY','APP_ORIGIN','COOKIE_SECURE','MODEL_SETTINGS_ENCRYPTION_KEY','LOCALAPPDATA','APP_DEVICE_BOOTSTRAP_KEY','SHUNSHOUPAI_TEST_PEER_ORIGIN','SHUNSHOUPAI_TEST_PEER_BOOTSTRAP_KEY')) {
+foreach ($name in @('NODE_ENV','HOSTNAME','APP_WEB_DIR','APP_LISTEN_HOST','PORT','APP_STORAGE','APP_DB_PATH','AI_API_KEY','APP_ORIGIN','COOKIE_SECURE','MODEL_SETTINGS_ENCRYPTION_KEY','LOCALAPPDATA','APP_DEVICE_BOOTSTRAP_KEY','SHUNSHOUPAI_TEST_PEER_ORIGIN','SHUNSHOUPAI_TEST_PEER_BOOTSTRAP_KEY')) {
     $saved[$name] = [Environment]::GetEnvironmentVariable($name, 'Process')
 }
 $first = $null; $second = $null; $native = $null
 $firstDatabase = Join-Path $TestRoot 'first\app.sqlite'
 $secondDatabase = Join-Path $TestRoot 'second\app.sqlite'
-$serverScript = '"' + (Join-Path $AppDirectory 'resources\backend\server.js') + '"'
+$serverScript = '"' + (Join-Path $AppDirectory 'resources\web') + '"'
 function New-Secret { [Convert]::ToBase64String([Security.Cryptography.RandomNumberGenerator]::GetBytes(32)).TrimEnd('=').Replace('+','-').Replace('/','_') }
 function Start-PeerServer([int]$Port, [string]$Database, [string]$Secret, [string]$Label) {
     $env:PORT = [string]$Port; $env:APP_DB_PATH = $Database; $env:APP_DEVICE_BOOTSTRAP_KEY = $Secret
-    Start-Process -FilePath (Join-Path $AppDirectory 'runtime\node.exe') -ArgumentList $serverScript -WorkingDirectory $TestRoot -WindowStyle Hidden -PassThru -RedirectStandardOutput (Join-Path $ReportDirectory "$Label.log") -RedirectStandardError (Join-Path $ReportDirectory "$Label-error.log")
+    Start-Process -FilePath (Join-Path $AppDirectory 'resources\backend\shunshoupai-server.exe') -ArgumentList @('--web', $serverScript) -WorkingDirectory $TestRoot -WindowStyle Hidden -PassThru -RedirectStandardOutput (Join-Path $ReportDirectory "$Label.log") -RedirectStandardError (Join-Path $ReportDirectory "$Label-error.log")
 }
 function Wait-PeerServer([int]$Port, [Diagnostics.Process]$Process) {
     for ($attempt = 0; $attempt -lt 60; $attempt++) {
@@ -44,7 +44,7 @@ function Run-PeerNative([string]$Mode, [string]$Label, [string]$FirstSecret, [st
     if ($process.ExitCode -ne 0) { throw "Peer native test $Mode failed ($($process.ExitCode)); reports: $ReportDirectory" }
 }
 try {
-    $env:NODE_ENV = 'production'; $env:HOSTNAME = '127.0.0.1'; $env:APP_STORAGE = 'local'
+    $env:NODE_ENV = 'production'; $env:APP_LISTEN_HOST = '127.0.0.1'; $env:APP_STORAGE = 'local'
     $env:AI_API_KEY = ''; $env:APP_ORIGIN = ''; $env:COOKIE_SECURE = 'false'; $env:MODEL_SETTINGS_ENCRYPTION_KEY = ''
     $env:LOCALAPPDATA = Join-Path $TestRoot 'localappdata'
     $firstSecret = New-Secret; $secondSecret = New-Secret

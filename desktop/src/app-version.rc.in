@@ -15,12 +15,12 @@ BEGIN
         BEGIN
             VALUE "CompanyName", "G-E-E-D\0"
             VALUE "FileDescription", "Shunshoupai desktop calendar\0"
-            VALUE "FileVersion", "@PROJECT_VERSION@\0"
+            VALUE "FileVersion", "@SHUNSHOUPAI_PACKAGE_VERSION@\0"
             VALUE "InternalName", "Shunshoupai\0"
             VALUE "LegalCopyright", "Copyright (c) 2026 G-E-E-D\0"
             VALUE "OriginalFilename", "Shunshoupai.exe\0"
             VALUE "ProductName", "Shunshoupai\0"
-            VALUE "ProductVersion", "@PROJECT_VERSION@\0"
+            VALUE "ProductVersion", "@SHUNSHOUPAI_PACKAGE_VERSION@\0"
         END
     END
     BLOCK "VarFileInfo"

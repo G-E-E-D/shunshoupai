@@ -2,10 +2,12 @@ name: Android APK
 
 on:
   push:
-    branches: [main]
+    branches: [main, beta]
     paths:
       - 'android/**'
       - 'src/**'
+      - 'backend/**'
+      - 'scripts/**'
       - 'package.json'
       - 'package-lock.json'
       - 'next.config.ts'
@@ -14,6 +16,8 @@ on:
     paths:
       - 'android/**'
       - 'src/**'
+      - 'backend/**'
+      - 'scripts/**'
       - 'package.json'
       - 'package-lock.json'
       - 'next.config.ts'
@@ -148,6 +152,10 @@ jobs:
         with:
           distribution: temurin
           java-version: '17'
+      - uses: actions/setup-go@v6
+        with:
+          go-version: '1.27.3'
+          cache-dependency-path: backend/go.sum
       - uses: actions/setup-node@v6
         with:
           node-version: 24
@@ -191,7 +199,7 @@ jobs:
           mkdir -p android/app/build/reports/backend
           # This is the same CLI as npm start, launched directly so the recorded
           # PID belongs to the server rather than an npm/shell wrapper.
-          nohup node node_modules/next/dist/bin/next start --hostname 0.0.0.0 --port 3000 > android/app/build/reports/backend/server.log 2>&1 &
+          nohup ./backend/bin/shunshoupai-server --host 0.0.0.0 --port 3000 --web out > android/app/build/reports/backend/server.log 2>&1 &
           echo "$!" > "$RUNNER_TEMP/android-web-server.pid"
           for attempt in $(seq 1 60); do
             if curl --fail --silent http://localhost:3000/api/auth/session > /dev/null; then

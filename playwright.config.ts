@@ -25,7 +25,7 @@ export default defineConfig({
     },
   ],
   webServer: {
-    command: "npm run dev -- --port 3001",
+    command: "npm start -- --port 3001",
     url: "http://localhost:3001/api/auth/session",
     timeout: 120_000,
     reuseExistingServer: false,

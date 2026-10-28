@@ -21,12 +21,14 @@ https://github.com/zxing-cpp/zxing-cpp/releases/tag/v3.1.1 .
 ZXing's bundled libzueci character conversion code is BSD-3-Clause; its
 copyright/license and upstream README are also retained in `licenses/ZXing/`.
 
-**Node.js 24** and its bundled third-party notices are in `licenses/Node-LICENSE`.
-Node.js source: https://github.com/nodejs/node .
+The **Go** runtime is statically included in the API executable. Its BSD license
+is in `licenses/Go-LICENSE`; source: https://go.dev/ . SQLite is provided by
+`modernc.org/sqlite`; exact module versions are recorded in `backend/go.mod` and
+their license files are copied into `licenses/go/`.
 
-The bundled API server contains Next.js, React, and dependencies. Their available
-package license files are retained under `resources/backend/node_modules/` and
-copied into `licenses/backend/` during packaging. Full application source and
+The static web interface is built with Next.js, React, and dependencies. Their
+available license files are copied into `licenses/backend/` during packaging.
+Node.js is a build dependency and is not bundled at runtime. Full application source and
 build scripts: https://github.com/G-E-E-D/shunshoupai .
 
 The Microsoft Visual C++ runtime DLLs are redistributed app-locally under the

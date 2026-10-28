@@ -3,7 +3,6 @@ param(
     [string]$BuildDir = (Join-Path $PSScriptRoot '..\build'),
     [string]$StageDir = (Join-Path $PSScriptRoot '..\stage'),
     [string]$OutputDir = (Join-Path $PSScriptRoot '..\dist'),
-    [string]$NodeExe = (Get-Command node -ErrorAction Stop).Source,
     [string]$Windeployqt = (Get-Command windeployqt -ErrorAction Stop).Source,
     [string]$Makensis = (Join-Path ${env:ProgramFiles(x86)} 'NSIS\makensis.exe'),
     [switch]$StageOnly
@@ -12,7 +11,8 @@ $ErrorActionPreference = 'Stop'
 $repoRoot = (Resolve-Path (Join-Path $PSScriptRoot '..\..')).Path
 $desktopRoot = Join-Path $repoRoot 'desktop'
 $version = (Get-Content -LiteralPath (Join-Path $repoRoot 'package.json') -Raw | ConvertFrom-Json).version
-if ($version -notmatch '^\d+\.\d+\.\d+$') { throw 'A numeric x.y.z version is required for Windows resources.' }
+if ($version -notmatch '^(\d+\.\d+\.\d+)(-beta\.\d+)?$') { throw 'Expected x.y.z or x.y.z-beta.n version.' }
+$numericVersion = $Matches[1]
 $BuildDir = [IO.Path]::GetFullPath($BuildDir)
 $StageDir = [IO.Path]::GetFullPath($StageDir)
 $OutputDir = [IO.Path]::GetFullPath($OutputDir)
@@ -22,9 +22,9 @@ if (!(Test-Path -LiteralPath $app)) { $app = Join-Path $BuildDir 'Release\Shunsh
 if (!(Test-Path -LiteralPath $app)) { throw 'Build Shunshoupai.exe before packaging.' }
 $appVersion = (Get-Item -LiteralPath $app).VersionInfo.ProductVersion
 if ($appVersion -ne $version) { throw "Native application version $appVersion does not match package.json $version. Rebuild the desktop application." }
-$standalone = Join-Path $repoRoot '.next\standalone'
-if (!(Test-Path -LiteralPath (Join-Path $standalone 'server.js'))) { throw 'Run npm run build with output: standalone first.' }
-$backendVersion = (Get-Content -LiteralPath (Join-Path $standalone 'package.json') -Raw | ConvertFrom-Json).version
+$goBinary = Join-Path $repoRoot 'backend\bin\shunshoupai-server.exe'
+if (!(Test-Path -LiteralPath $goBinary)) { throw 'Run npm run build to build the Go backend first.' }
+$backendVersion = & $goBinary --version
 if ($backendVersion -ne $version) { throw "Bundled backend version $backendVersion does not match package.json $version. Run npm run build again." }
 New-Item -ItemType Directory -Path $StageDir, $OutputDir -Force | Out-Null
 Copy-Item -LiteralPath $app -Destination (Join-Path $StageDir 'Shunshoupai.exe')
@@ -38,17 +38,9 @@ if ($env:VCToolsRedistDir) {
     Get-ChildItem -LiteralPath $crt.FullName -Filter '*.dll' -File | Copy-Item -Destination $StageDir
 }
 
-$runtime = New-Item -ItemType Directory -Path (Join-Path $StageDir 'runtime')
-$nodeVersion = & $NodeExe --version
-if ($LASTEXITCODE -ne 0 -or $nodeVersion -notmatch '^v24\.') { throw 'The installer requires Node.js 24.' }
-Copy-Item -LiteralPath $NodeExe -Destination (Join-Path $runtime.FullName 'node.exe')
 $licenses = New-Item -ItemType Directory -Path (Join-Path $StageDir 'licenses')
-$nodeLicense = Join-Path (Split-Path $NodeExe) 'LICENSE'
-if (!(Test-Path -LiteralPath $nodeLicense)) {
-    $nodeLicense = Join-Path $OutputDir 'Node-LICENSE'
-    Invoke-WebRequest -Uri "https://raw.githubusercontent.com/nodejs/node/$nodeVersion/LICENSE" -OutFile $nodeLicense
-}
-Copy-Item -LiteralPath $nodeLicense -Destination (Join-Path $licenses.FullName 'Node-LICENSE')
+$goRoot = & go env GOROOT
+Copy-Item -LiteralPath (Join-Path $goRoot 'LICENSE') -Destination (Join-Path $licenses.FullName 'Go-LICENSE')
 Copy-Item -LiteralPath (Join-Path $desktopRoot 'THIRD_PARTY_NOTICES.md') -Destination $StageDir
 Copy-Item -LiteralPath (Join-Path $desktopRoot 'vendor\qrcodegen.hpp') -Destination $licenses.FullName
 Copy-Item -LiteralPath (Join-Path $desktopRoot 'licenses\Qt') -Destination $licenses.FullName -Recurse
@@ -56,16 +48,21 @@ Copy-Item -LiteralPath (Join-Path $BuildDir 'third-party\ZXing') -Destination $l
 
 $backend = Join-Path $StageDir 'resources\backend'
 New-Item -ItemType Directory -Path $backend -Force | Out-Null
-# Robocopy materializes traced Windows junctions rather than shipping build-machine
-# absolute links. No local configuration, database, encryption key or cache is shipped.
-& robocopy $standalone $backend /E /R:2 /W:1 /NFL /NDL /NJH /NJS /NP /XF '.env*' '*.sqlite' '*.sqlite-*' '*.db' 'model-encryption.key*' /XD (Join-Path $standalone 'data') (Join-Path $standalone '.next\cache') | Out-Null
-if ($LASTEXITCODE -ge 8) { throw "Copying standalone backend failed ($LASTEXITCODE)." }
-foreach ($item in @(@('public', 'public'), @('.next\static', '.next\static'))) {
-    $source = Join-Path $repoRoot $item[0]
-    if (Test-Path -LiteralPath $source) {
-        & robocopy $source (Join-Path $backend $item[1]) /E /R:2 /W:1 /NFL /NDL /NJH /NJS /NP | Out-Null
-        if ($LASTEXITCODE -ge 8) { throw "Copying $source failed." }
-    }
+Copy-Item -LiteralPath $goBinary -Destination $backend
+Copy-Item -LiteralPath (Join-Path $repoRoot 'backend\bin\package.json') -Destination $backend
+$staticRoot = Join-Path $repoRoot 'out'
+if (!(Test-Path -LiteralPath (Join-Path $staticRoot 'mobile\index.html'))) { throw 'Static mobile frontend is missing.' }
+Copy-Item -LiteralPath $staticRoot -Destination (Join-Path $StageDir 'resources\web') -Recurse
+# Include licenses of the exact Go modules used to build this release.
+Push-Location (Join-Path $repoRoot 'backend')
+try { $modules = & go list -m -f '{{if .Dir}}{{.Path}}|{{.Dir}}{{end}}' all; if ($LASTEXITCODE -ne 0) { throw 'Cannot enumerate Go licenses.' } }
+finally { Pop-Location }
+foreach ($module in $modules) {
+    $parts = $module -split '\|', 2
+    if ($parts.Length -ne 2 -or $parts[0] -eq 'shunshoupai/backend') { continue }
+    $destination = Join-Path $licenses.FullName ('go\' + $parts[0].Replace('/', '\'))
+    New-Item -ItemType Directory -Path $destination -Force | Out-Null
+    Get-ChildItem -LiteralPath $parts[1] -File | Where-Object { $_.Name -match '^(LICENSE|LICENCE|COPYING|NOTICE)' } | Copy-Item -Destination $destination
 }
 $unsafe = Get-ChildItem -LiteralPath $StageDir -Force -Recurse | Where-Object {
     $_.Attributes -band [IO.FileAttributes]::ReparsePoint -or
@@ -100,7 +97,7 @@ if ($StageOnly) {
     return
 }
 $installer = Join-Path $OutputDir "shunshoupai-desktop-v$version-setup.exe"
-& $Makensis "/DAPP_VERSION=$version" "/DSTAGE_DIR=$StageDir" "/DOUTPUT_FILE=$installer" "/DUNINSTALL_INCLUDE=$uninstall" (Join-Path $desktopRoot 'installer\setup.nsi')
+& $Makensis "/DAPP_VERSION=$version" "/DNUMERIC_VERSION=$numericVersion" "/DSTAGE_DIR=$StageDir" "/DOUTPUT_FILE=$installer" "/DUNINSTALL_INCLUDE=$uninstall" (Join-Path $desktopRoot 'installer\setup.nsi')
 if ($LASTEXITCODE -ne 0) { throw 'NSIS installer compilation failed.' }
 $hash = (Get-FileHash -LiteralPath $installer -Algorithm SHA256).Hash.ToLowerInvariant()
 Set-Content -LiteralPath (Join-Path $OutputDir 'SHA256SUMS.txt') -Value "$hash  $([IO.Path]::GetFileName($installer))" -Encoding ascii

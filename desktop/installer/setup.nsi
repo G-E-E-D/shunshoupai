@@ -29,7 +29,7 @@ SetCompressorDictSize 32
 ShowInstDetails show
 AutoCloseWindow true
 BrandingText "顺手排 ${APP_VERSION}"
-VIProductVersion "${APP_VERSION}.0"
+VIProductVersion "${NUMERIC_VERSION}.0"
 VIAddVersionKey /LANG=2052 "ProductName" "顺手排"
 VIAddVersionKey /LANG=2052 "FileDescription" "顺手排 Windows 安装程序"
 VIAddVersionKey /LANG=2052 "FileVersion" "${APP_VERSION}"

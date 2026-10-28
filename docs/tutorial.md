@@ -1,12 +1,12 @@
 # 打开就记，需要同步时再扫码
 
-顺手排 v2.0.0 不需要日程账号、邮箱或密码。电脑打开应用即可使用本机日程；手机安装后也能独立新增、修改、完成、删除和搜索，电脑不在线时照常记录。
+顺手排 v2.1.0-beta.1 不需要日程账号、邮箱或密码。电脑打开应用即可使用本机日程；手机安装后也能独立新增、修改、完成、删除和搜索，电脑不在线时照常记录。
 
-[Windows 安装器](https://github.com/G-E-E-D/shunshoupai/releases/download/v2.0.0/shunshoupai-desktop-v2.0.0-setup.exe) · [Android APK](https://github.com/G-E-E-D/shunshoupai/releases/download/v2.0.0/shunshoupai-android-v2.0.0.apk) · [发布页](https://github.com/G-E-E-D/shunshoupai/releases/tag/v2.0.0)
+[Windows 安装器](https://github.com/G-E-E-D/shunshoupai/releases/download/v2.1.0-beta.1/shunshoupai-desktop-v2.1.0-beta.1-setup.exe) · [Android APK](https://github.com/G-E-E-D/shunshoupai/releases/download/v2.1.0-beta.1/shunshoupai-android-v2.1.0-beta.1.apk) · [发布页](https://github.com/G-E-E-D/shunshoupai/releases/tag/v2.1.0-beta.1)
 
 ## 先把安排记下来
 
-Windows 安装包包含原生 Qt 界面、Node.js 和本机数据库服务，不用另外安装 Node。手机首页是原生日程，不必先扫描或等待电脑。
+Windows 安装包包含原生 Qt 界面、Go 和本机数据库服务，不用另外安装运行环境。手机首页是原生日程，不必先扫描或等待电脑。
 
 电脑可以手工创建日程，也可以输入：
 
@@ -18,7 +18,7 @@ Windows 安装包包含原生 Qt 界面、Node.js 和本机数据库服务，不
 
 ## 任意两台设备接着用
 
-1. 两端都更新到 v2.0.0，并连接同一个可信 Wi-Fi。
+1. 两端都更新到 v2.1.0-beta.1，并连接同一个可信 Wi-Fi。
 2. 其中一台电脑或手机打开“配对设备”，展示自己的二维码或配对链接。
 3. 另一台设备扫码或粘贴配对链接，阅读共享范围并确认。
 4. 配对后自动尝试合并。对方离线时继续在本机记录；安卓应用需保持前台才能接收同步。

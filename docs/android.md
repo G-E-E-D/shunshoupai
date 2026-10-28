@@ -1,15 +1,15 @@
-# Android 客户端（v2.0.0）
+# Android 客户端（v2.1.0-beta.1）
 
 手机打开即进入原生日程，无需账号或电脑连接。新增、编辑、完成、删除和搜索都先在本机保存；需要与另一台手机或电脑合并时再扫码配对。智能整理和模型设置使用配对电脑提供的 Web 工作台，需要电脑在线。
 
-[下载 APK](https://github.com/G-E-E-D/shunshoupai/releases/download/v2.0.0/shunshoupai-android-v2.0.0.apk) · [发布页](https://github.com/G-E-E-D/shunshoupai/releases/tag/v2.0.0)
+[下载 APK](https://github.com/G-E-E-D/shunshoupai/releases/download/v2.1.0-beta.1/shunshoupai-android-v2.1.0-beta.1.apk) · [发布页](https://github.com/G-E-E-D/shunshoupai/releases/tag/v2.1.0-beta.1)
 
-应用 ID 为 `com.shunshoupai.app`，`versionName=2.0.0`、`versionCode=6`，最低 Android 8.0 / API 26。客户端使用 Java，无需 NDK、JNI 或 CMake。正式覆盖升级必须使用同一正式签名；不要卸载来代替升级，否则会删除手机本机数据。
+应用 ID 为 `com.shunshoupai.app`，`versionName=2.1.0-beta.1`、`versionCode=7`，最低 Android 8.0 / API 26。客户端使用 Java，无需 NDK、JNI 或 CMake。正式覆盖升级必须使用同一正式签名；不要卸载来代替升级，否则会删除手机本机数据。
 
 ## 日常使用与配对
 
 1. 安装后直接记录日程，未配对时也能使用。
-2. 需要同步时，任一手机或电脑打开 v2.0.0，在设备连接入口展示一次性二维码。
+2. 需要同步时，任一手机或电脑打开 v2.1.0-beta.1，在设备连接入口展示一次性二维码。
 3. 两端连接同一可信局域网，另一端扫码或粘贴配对链接，确认共享范围。
 4. 回到日程即可继续使用。手机前台及回到应用时自动尝试同步；断线期间继续本机保存。手机只有在前台才开放接收服务，退到后台或关闭应用后不能被另一端同步。
 

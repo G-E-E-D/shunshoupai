@@ -1,20 +1,22 @@
 {
   "name": "shunshoupai",
-  "version": "2.0.0",
+  "version": "2.1.0-beta.1",
   "license": "MIT",
   "private": true,
   "engines": {
     "node": ">=24.0.0"
   },
   "scripts": {
-    "dev": "next dev --hostname 0.0.0.0",
-    "build": "next build",
-    "start": "next start --hostname 0.0.0.0",
+    "dev": "npm run build && node scripts/start.mjs",
+    "build": "node scripts/build.mjs",
+    "start": "node scripts/start.mjs",
     "lint": "eslint .",
     "typecheck": "next typegen && tsc --noEmit",
     "test": "tsx --test tests/*.test.ts",
     "test:e2e": "playwright test",
-    "check": "npm run lint && npm run typecheck && npm test && npm run build"
+    "check": "npm run lint && npm run typecheck && npm test && npm run test:go && npm run build && npm run test:migration",
+    "test:go": "cd backend && go test ./...",
+    "test:migration": "tsx tests/migration/go-backend.ts"
   },
   "dependencies": {
     "@supabase/ssr": "0.12.7",

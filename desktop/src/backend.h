@@ -31,9 +31,8 @@ public:
     QByteArray deviceBootstrapKey() const { return bootstrapKey; }
     QString start() {
         const auto root = QCoreApplication::applicationDirPath();
-        const auto node = root + "/runtime/node.exe";
-        const auto server = root + "/resources/backend/server.js";
-        if (!QFileInfo::exists(node) || !QFileInfo::exists(server))
+        const auto server = root + "/resources/backend/shunshoupai-server.exe";
+        if (!QFileInfo::exists(server))
             return QStringLiteral("未找到内置服务。源码运行请使用 --backend http://电脑地址:端口；安装版请重新安装。");
         QTcpServer portCheck;
         if (!portCheck.listen(QHostAddress::AnyIPv4, 43127))
@@ -41,8 +40,8 @@ public:
         portCheck.close();
         QDir().mkpath(appDataDirectory() + "/data");
         auto env = QProcessEnvironment::systemEnvironment();
-        env.insert("NODE_ENV", "production");
-        env.insert("HOSTNAME", "0.0.0.0");
+        env.insert("APP_LISTEN_HOST", "0.0.0.0");
+        env.insert("APP_WEB_DIR", root + "/resources/web");
         env.insert("PORT", "43127");
         env.insert("APP_STORAGE", "local");
         env.insert("APP_DB_PATH", appDataDirectory() + "/data/app.sqlite");
@@ -60,7 +59,7 @@ public:
             args->flags |= CREATE_NO_WINDOW;
         });
 #endif
-        process.start(node, {server});
+        process.start(server, {});
         if (!process.waitForStarted(8000)) return QStringLiteral("内置日程服务未能启动，请检查安装文件。");
 #ifdef Q_OS_WIN
         job = CreateJobObjectW(nullptr, nullptr);

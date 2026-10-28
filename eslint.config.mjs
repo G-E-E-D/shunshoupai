@@ -18,5 +18,11 @@ export default defineConfig([
     "test-results/**",
     "**/*_files/**",
     "next-env.d.ts",
+    "tmp/**",
+    "out/**",
+    "backend/.gopath/**",
+    "backend/.cache/**",
+    "output/**",
+    ".codex-remote-attachments/**",
   ]),
 ]);

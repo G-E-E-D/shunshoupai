@@ -33,15 +33,18 @@
     "**/*.ts",
     "**/*.tsx",
     ".next/types/**/*.ts",
-    ".next/dev/types/**/*.ts",
-    ".next-e2e/types/**/*.ts",
-    ".next-e2e/dev/types/**/*.ts"
+    ".next/dev/types/**/*.ts"
   ],
   "exclude": [
     "node_modules",
     ".next/dev/types",
     "desktop/**",
     "android/**",
-    "artifacts/**"
+    "artifacts/**",
+    "tmp/**",
+    "backend/**",
+    "output/**",
+    ".codex-remote-attachments/**",
+    ".next-e2e/**"
   ]
 }
