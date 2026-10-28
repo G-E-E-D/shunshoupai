@@ -1,8 +1,8 @@
-# Windows 原生桌面端（v2.1.0-beta.1）
+# Windows 原生桌面端（v2.1.0-beta.2）
 
 桌面使用 C++17 / Qt 6 Widgets 和 Qt Network，不嵌入浏览器。安装后打开即可使用本机日程，无需注册、登录或维持账号会话。
 
-[Windows 安装器](https://github.com/G-E-E-D/shunshoupai/releases/download/v2.1.0-beta.1/shunshoupai-desktop-v2.1.0-beta.1-setup.exe) · [发布页](https://github.com/G-E-E-D/shunshoupai/releases/tag/v2.1.0-beta.1)
+[Windows 安装器](https://github.com/G-E-E-D/shunshoupai/releases/download/v2.1.0-beta.2/shunshoupai-desktop-v2.1.0-beta.2-setup.exe) · [发布页](https://github.com/G-E-E-D/shunshoupai/releases/tag/v2.1.0-beta.2)
 
 ## 安装与数据
 

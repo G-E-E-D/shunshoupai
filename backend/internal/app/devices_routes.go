@@ -59,6 +59,18 @@ func (s *Server) requireOwner(r *http.Request) (*Grant, error) {
 	}
 	return g, nil
 }
+
+// A paired device receives calendar permissions, never the local model service.
+func (s *Server) requireLocalFeature(r *http.Request) (*Grant, error) {
+	g, e := s.requireAuth(r)
+	if e != nil {
+		return nil, e
+	}
+	if g.Role != "owner" {
+		return nil, appErr("SYNC_ONLY_DEVICE", "配对仅用于同步日程，请在当前设备配置和使用智能整理。", 403)
+	}
+	return g, nil
+}
 func (s *Server) session(g *Grant) (Object, error) {
 	ai := "rules"
 	if os.Getenv("AI_API_KEY") != "" {
@@ -73,6 +85,9 @@ func (s *Server) session(g *Grant) (Object, error) {
 	}
 	ctx["user"] = Object{"id": g.SpaceID, "email": ""}
 	ctx["mode"] = "local"
+	if g.Role != "owner" {
+		ai = "rules"
+	}
 	ctx["ai_provider"] = ai
 	ctx["local_first"] = true
 	ctx["role"] = g.Role
@@ -140,7 +155,7 @@ func (s *Server) registerDevices() {
 			return nil, e
 		}
 		info, e := s.session(g)
-		if e != nil || g == nil {
+		if e != nil || g == nil || g.Role != "owner" {
 			return info, e
 		}
 		source, e := s.Store.effectiveAISource(g.SpaceID)
@@ -167,7 +182,7 @@ func (s *Server) registerDevices() {
 		if e := sameOrigin(r); e != nil {
 			return nil, e
 		}
-		g, e := s.requireAuth(r)
+		g, e := s.requireLocalFeature(r)
 		if e != nil {
 			return nil, e
 		}

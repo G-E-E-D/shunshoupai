@@ -62,7 +62,7 @@ func loadIdentity(db DBTX) (*deviceIdentity, error) {
 	return i, err
 }
 func identityContext(i *deviceIdentity) Object {
-	return Object{"capabilities": Object{"replica": 1, "web": true, "ai": true}, "peer_id": i.ID, "space_id": i.SpaceID, "device": Object{"id": i.ID, "name": i.Name}, "legacy_space_ids": []string{i.SpaceID}}
+	return Object{"capabilities": Object{"replica": 1, "web": false, "ai": false}, "peer_id": i.ID, "space_id": i.SpaceID, "device": Object{"id": i.ID, "name": i.Name, "platform": "windows"}, "legacy_space_ids": []string{i.SpaceID}}
 }
 func (s *Store) DeviceContext() (Object, error) {
 	i, e := loadIdentity(s.DB)

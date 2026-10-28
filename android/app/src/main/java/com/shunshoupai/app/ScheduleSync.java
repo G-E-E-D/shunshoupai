@@ -3,7 +3,6 @@ package com.shunshoupai.app;
 import android.content.Context;
 import android.os.Handler;
 import android.os.SystemClock;
-import android.webkit.CookieManager;
 import org.json.JSONArray;
 import org.json.JSONObject;
 import java.util.List;
@@ -17,7 +16,7 @@ import java.util.function.Supplier;
 final class ScheduleSync {
     interface Listener {void result(String origin,String scope,String message,boolean pairingRequired);}
     interface PairCallback {void complete(String origin,String scope,String error);}
-    interface WebCallback {void complete(String error);}
+    interface CompletionCallback {void complete(String error);}
     private static final String END_CURSOR="ffffffff-ffff-ffff-ffff-ffffffffffff";
     private final ExecutorService worker=Executors.newSingleThreadExecutor();
     private final Handler handler;private final LocalScheduleStore store;private final DeviceCredentials credentials;private final DeviceHostRuntime host;private final Listener listener;private final PeerHttp http=new PeerHttp();
@@ -79,7 +78,7 @@ final class ScheduleSync {
                 PeerIdentity identity=PeerIdentity.verify(advertised,challenge,clientId,null,null,null);if(clientId.equals(identity.peerId))throw new SecurityException("这是本机配对码，请在另一台设备扫描。");
                 JSONObject previous=store.peer(identity.peerId);if(previous!=null)PeerIdentity.verify(advertised,challenge,clientId,previous.getString("public_key"),previous.getString("peer_id"),previous.getString("space_id"));
                 String ownOrigin=returnOrigin.get();if(ownOrigin==null)throw new SecurityException("请连接同一局域网后再配对。");ownOrigin=PeerHttp.origin(ownOrigin);
-                JSONObject grant; synchronized(lifecycle){current(expected);grant=host.callbackGrant(identity.peerId,identity.name,advertised.optJSONObject("capabilities")!=null&&advertised.getJSONObject("capabilities").optBoolean("web")?"windows":"android");}callbackGrant=grant.getString("pairing_id");
+                JSONObject grant; synchronized(lifecycle){current(expected);grant=host.callbackGrant(identity.peerId,identity.name,advertised.optJSONObject("device")!=null&&"windows".equals(advertised.getJSONObject("device").optString("platform"))?"windows":"android");}callbackGrant=grant.getString("pairing_id");
                 JSONObject back=new JSONObject().put("origin",ownOrigin).put("token",grant.getString("token")).put("peer_id",clientId).put("space_id",store.primarySpaceId()).put("public_key",host.publicKey());
                 JSONObject body=new JSONObject().put("token",scanned.pairingToken).put("device_id",clientId).put("device_name",store.deviceName()).put("platform","android").put("challenge",challenge).put("return_connection",back);
                 JSONObject redeemed=http.request(origin,"api/pairing/redeem","POST",body,null,()->cancelled(expected)).body;
@@ -92,17 +91,9 @@ final class ScheduleSync {
         });
     }
 
-    void openWeb(WebCallback callback){openWeb(null,callback);}
-    void openWeb(String peerId,WebCallback callback){
-        invalidate();busy=true;final long expected=generation;
-        worker.execute(()->{try{JSONObject peer=peerId==null?store.webPeer():store.peer(peerId);if(peer!=null&&(!peer.optBoolean("enabled")||!peer.getJSONObject("capabilities").optBoolean("web")))peer=null;if(peer==null)throw new SecurityException("已配对手机可以同步日程；电脑工具需要一台支持此功能的电脑。");String token=credentials.read(peer.getString("peer_id"),peer.getString("space_id"));if(token==null)throw new SecurityException("请重新扫码连接这台电脑。");verifyAddress(peer,expected);PeerHttp.Result response=http.request(peer.getString("origin"),"api/devices/web-session","POST",new JSONObject(),token,()->cancelled(expected));checkPeer(response.body,peer);if(response.cookies.isEmpty())throw new SecurityException("电脑未建立网页连接。");String origin=peer.getString("origin");handler.post(()->{if(!cancelled(expected))CookieManager.getInstance().removeAllCookies(removed->applyCookies(origin,response.cookies,0,expected,callback));});}
-            catch(Exception failure){String error=message(failure);handler.post(()->{if(!cancelled(expected)){busy=false;callback.complete(error);}});}});
-    }
-    private void applyCookies(String origin,List<String> cookies,int index,long expected,WebCallback callback){if(cancelled(expected))return;if(index==cookies.size()){CookieManager.getInstance().flush();busy=false;callback.complete(null);return;}CookieManager.getInstance().setCookie(origin,cookies.get(index),ok->{if(!ok){if(!cancelled(expected)){busy=false;callback.complete("网页连接未准备好，请重试。");}}else applyCookies(origin,cookies,index+1,expected,callback);});}
-
-    void unpair(String peerId,WebCallback callback){
+    void unpair(String peerId,CompletionCallback callback){
         invalidate();final long expected=generation;final JSONObject peer;final String token;
-        try{synchronized(store){peer=store.peer(peerId);token=peer==null?null:credentials.read(peerId,peer.getString("space_id"));revokeLocally(peerId);credentials.remove(peerId);}CookieManager.getInstance().removeAllCookies(ignored->CookieManager.getInstance().flush());}catch(Exception error){callback.complete("无法更新配对状态，请重试。");return;}
+        try{synchronized(store){peer=store.peer(peerId);token=peer==null?null:credentials.read(peerId,peer.getString("space_id"));revokeLocally(peerId);credentials.remove(peerId);}}catch(Exception error){callback.complete("无法更新配对状态，请重试。");return;}
         worker.execute(()->{String error=null;try{if(peer!=null&&token!=null){verifyAddress(peer,expected);JSONObject info=http.request(peer.getString("origin"),"api/devices/info","GET",null,token,()->cancelled(expected)).body;checkPeer(info,peer);String grantId=info.getJSONObject("peer").getString("id");http.request(peer.getString("origin"),"api/devices/"+PeerIdentity.uuid(grantId),"DELETE",new JSONObject(),token,()->cancelled(expected));}}catch(PeerHttp.Failure failure){if(failure.status!=401&&failure.status!=404)error="本机已停止双向同步；对方可达时会发现配对已撤销。";}catch(Exception failure){error="本机已停止双向同步；对方可达时会发现配对已撤销。";}String message=error;handler.post(()->{if(!cancelled(expected))callback.complete(message);});});
     }
     private void assertCallbackActive(String grantId,String peerId) {

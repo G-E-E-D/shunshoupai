@@ -436,6 +436,7 @@ export default function Dashboard({ initialDay }: { initialDay: string }) {
   const sessionRequest = useRef<Promise<void> | null>(null);
   const refreshing = useRef<{ key: string; request: number } | null>(null);
   const userId = session.user?.id;
+  const syncOnly = session.role === "peer";
   const deviceName = session.peer?.name || session.device?.name || "我的设备";
   const draftKey = `shunshoupai-draft-${userId || "guest"}`;
   const pendingKey = `shunshoupai-pending-${userId || "guest"}`;
@@ -474,7 +475,7 @@ export default function Dashboard({ initialDay }: { initialDay: string }) {
   }, []);
 
   const refreshModelSettings = useCallback(async () => {
-    if (!userId) return;
+    if (!userId || syncOnly) return;
     try {
       const { settings } = await api<{ settings: ModelSettingsInfo }>(
         "/api/model-settings",
@@ -490,7 +491,7 @@ export default function Dashboard({ initialDay }: { initialDay: string }) {
     } catch {
       /* The settings form displays configuration errors without blocking the calendar. */
     }
-  }, [userId]);
+  }, [userId, syncOnly]);
 
   const restoreSession = useCallback(() => {
     if (sessionRequest.current) return sessionRequest.current;
@@ -739,6 +740,10 @@ export default function Dashboard({ initialDay }: { initialDay: string }) {
     setNotice({ kind: "info", text: "已解除配对，已保存在设备上的日程和草稿仍保留。" });
   }
   async function parse() {
+    if (syncOnly) {
+      setNotice({ kind: "info", text: "配对仅同步日程，请在本机应用使用智能整理。" });
+      return;
+    }
     if (
       actionLock.current ||
       uncertain ||
@@ -1263,14 +1268,14 @@ export default function Dashboard({ initialDay }: { initialDay: string }) {
                 <Plus size={17} />
                 手动添加
               </button>
-              <button className="secondary-button quick-compose" onClick={() => {
+              {!syncOnly && <button className="secondary-button quick-compose" onClick={() => {
                 const input = document.getElementById("schedule-input");
                 input?.focus({ preventScroll: true });
                 input?.scrollIntoView({ block: "center" });
               }}>
                 <Sparkles size={17} />
                 一句话安排
-              </button>
+              </button>}
             </div>
           </section>
           {(!online || syncError) && (
@@ -1317,8 +1322,8 @@ export default function Dashboard({ initialDay }: { initialDay: string }) {
             </div>
           )}
           <div className="dashboard-grid">
-            <section className="composer-column" aria-label="日程整理">
-              <div className="composer-card">
+            <section className="composer-column" aria-label={syncOnly ? "日程确认" : "日程整理"}>
+              {syncOnly ? <div className="inline-info" role="status">配对仅同步日程，请在本机应用使用智能整理。</div> : <div className="composer-card">
                 <div className="card-topline">
                   <span className="section-icon">
                     <Sparkles size={19} />
@@ -1401,6 +1406,7 @@ export default function Dashboard({ initialDay }: { initialDay: string }) {
                   </div>
                 )}
               </div>
+              }
               {parseResult ? (
                 <div className="draft-section">
                   <div className="draft-heading">
@@ -1545,7 +1551,7 @@ export default function Dashboard({ initialDay }: { initialDay: string }) {
                   )}
                   <p className="draft-note">草稿尚未保存 · 上海时区 UTC+8</p>
                 </div>
-              ) : (
+              ) : !syncOnly && (
                 <div className="how-it-works">
                   <div className="how-heading">
                     <span className="little-sparkle">✦</span>
@@ -1965,7 +1971,7 @@ export default function Dashboard({ initialDay }: { initialDay: string }) {
                 {session.device?.name ? `${session.device.name} · 本机保存` : "各设备独立保存"}
               </strong>
             </div>
-            <div>
+            {!syncOnly && <div>
               <span>解析方式</span>
               <strong>
                 {session.ai_provider === "model"
@@ -1974,7 +1980,7 @@ export default function Dashboard({ initialDay }: { initialDay: string }) {
                     : "设备默认模型（已配置）"
                   : "有限规则解析（未接模型）"}
               </strong>
-            </div>
+            </div>}
             <div>
               <span>显示时区</span>
               <strong>Asia/Shanghai · UTC+8</strong>
@@ -2004,7 +2010,7 @@ export default function Dashboard({ initialDay }: { initialDay: string }) {
               />
             </div>
           </div>
-          <button
+          {!syncOnly && <button
             className="secondary-button wide model-settings-entry"
             disabled={!userId || saving || parsing}
             onClick={() => {
@@ -2015,7 +2021,7 @@ export default function Dashboard({ initialDay }: { initialDay: string }) {
             <KeyRound size={16} />
             模型设置
             <ArrowRight size={15} />
-          </button>
+          </button>}
           <p className="settings-note">
             提醒需要页面在前台活跃运行；锁屏、后台或关闭网页时，不提供系统级准点提醒。配对设备连接时，网页日程在前台每
             8 秒和回到页面时刷新。
@@ -2032,7 +2038,7 @@ export default function Dashboard({ initialDay }: { initialDay: string }) {
           )}
         </Modal>
       )}
-      {modelSettingsOpen && userId && (
+      {modelSettingsOpen && userId && !syncOnly && (
         <Modal
           title="模型设置"
           subtitle="用自己的模型整理日程，配置保存在当前连接的设备。"

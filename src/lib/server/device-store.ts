@@ -115,7 +115,7 @@ export class DeviceStore {
 
   context() {
     const identity = this.identity();
-    return { capabilities: { replica: 1, web: true, ai: true }, peer_id: identity.id, space_id: identity.space_id, device: { id: identity.id, name: identity.name }, legacy_space_ids: [identity.space_id] };
+    return { capabilities: { replica: 1, web: false, ai: false }, peer_id: identity.id, space_id: identity.space_id, device: { id: identity.id, name: identity.name, platform: "windows" }, legacy_space_ids: [identity.space_id] };
   }
 
   proof(challenge: string, clientId: string) {

@@ -131,7 +131,7 @@ async function settings(page: Page): Promise<ModelSettingsInfo> {
   return body.settings as ModelSettingsInfo;
 }
 
-test("personal model setup is tested before save, shared with paired devices and used with the fixed prompt", async ({
+test("the local owner uses its own model while paired devices receive only schedule access", async ({
   page,
   browser,
 }) => {
@@ -173,8 +173,7 @@ test("personal model setup is tested before save, shared with paired devices and
     fullPage: true,
   });
 
-  // A paired device shares this local space; an unpaired browser cannot
-  // retrieve metadata or use the saved model credential.
+  // Calendar pairing never grants access to this device's model or credential.
   const secondContext = await browser.newContext({
     baseURL: "http://localhost:3001",
     viewport: { width: 360, height: 800 },
@@ -184,14 +183,27 @@ test("personal model setup is tested before save, shared with paired devices and
   const second = await secondContext.newPage();
   try {
     await pairDevice(page.request, second.request);
+    const modelPolls: string[] = [];
+    second.on("request", request => { if (request.url().includes("/api/model-settings")) modelPolls.push(request.url()); });
     await loadPage(second);
-    const secondDialog = await openModelSettings(second);
-    await expect(
-      secondDialog.getByLabel("模型名称", { exact: true }),
-    ).toHaveValue("personal-model");
-    await expect(
-      secondDialog.getByLabel("API Key", { exact: true }),
-    ).toHaveValue("");
+    await expect(second.getByText("配对仅同步日程，请在本机应用使用智能整理。", { exact: true })).toBeVisible();
+    await expect(second.getByLabel("描述你的日程安排")).toHaveCount(0);
+    await expect(second.getByRole("button", { name: "一句话安排", exact: true })).toHaveCount(0);
+    await second.locator("header").getByRole("button", { name: "打开设备与同步", exact: true }).click();
+    await expect(second.getByRole("button", { name: "模型设置", exact: true })).toHaveCount(0);
+    await second.getByRole("dialog").getByRole("button", { name: "关闭弹窗", exact: true }).click();
+    await second.evaluate(() => window.dispatchEvent(new Event("focus")));
+    await expect(second.locator(".sync-badge")).toHaveText("连接正常");
+    expect(modelPolls).toHaveLength(0);
+    for (const [path, method] of [["/api/model-settings", "GET"], ["/api/model-settings", "PUT"], ["/api/model-settings", "DELETE"], ["/api/model-settings/test", "POST"], ["/api/ai/parse", "POST"], ["/api/devices/web-session", "POST"]] as const) {
+      const forbidden = await second.request.fetch(path, { method, ...(method === "GET" ? {} : { data: {} }) });
+      expect(forbidden.status()).toBe(403);
+      const body = await forbidden.json();
+      expect(body.error.code).toBe("SYNC_ONLY_DEVICE");
+      expect(JSON.stringify(body)).not.toContain(key);
+      expect(JSON.stringify(body)).not.toContain(providerBase);
+    }
+    expect(requests).toHaveLength(1);
     expect(
       await second.evaluate(
         () => document.documentElement.scrollWidth <= innerWidth,

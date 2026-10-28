@@ -510,7 +510,7 @@ func (s *Store) modelBusy(space string, now time.Time) ([]busyInterval, error) {
 	return out, rows.Err()
 }
 func (s *Server) handleParse(w http.ResponseWriter, r *http.Request) (any, error) {
-	grant, e := s.requireAuth(r)
+	grant, e := s.requireLocalFeature(r)
 	if e != nil {
 		return nil, e
 	}

@@ -24,7 +24,7 @@ import java.util.concurrent.atomic.AtomicReference;
 @RunWith(AndroidJUnit4.class)
 public class PeerNativeUiInstrumentedTest {
     private Context context;
-    @Before public void clear(){context=ApplicationProvider.getApplicationContext();context.deleteDatabase("schedule-offline.sqlite");context.getSharedPreferences("connection",Context.MODE_PRIVATE).edit().clear().commit();context.getSharedPreferences("offline-editor",Context.MODE_PRIVATE).edit().clear().commit();}
+    @Before public void clear(){context=ApplicationProvider.getApplicationContext();context.deleteDatabase("schedule-offline.sqlite");context.getSharedPreferences("native-workbench",Context.MODE_PRIVATE).edit().clear().commit();context.getSharedPreferences("planning-drafts",Context.MODE_PRIVATE).edit().clear().commit();context.getSharedPreferences("local-model-settings-v1",Context.MODE_PRIVATE).edit().clear().commit();context.getSharedPreferences("connection",Context.MODE_PRIVATE).edit().clear().commit();context.getSharedPreferences("offline-editor",Context.MODE_PRIVATE).edit().clear().commit();}
     private Object field(MainActivity activity,String name){try{java.lang.reflect.Field field=MainActivity.class.getDeclaredField(name);field.setAccessible(true);return field.get(activity);}catch(Exception error){throw new AssertionError(error);}}
     @Test public void qrHostRemainsActiveInDialogAndRestartsOnSamePortAfterForegroundResume()throws Exception {
         try(ActivityScenario<MainActivity> scenario=ActivityScenario.launch(MainActivity.class)){
@@ -52,7 +52,7 @@ public class PeerNativeUiInstrumentedTest {
             scenario.onActivity(activity->{try{JSONObject row=local.get().list(local.get().primaryScope()).get(0);assertEquals(eventId.get(),row.getString("id"));assertEquals("手机B：河边散步",row.getString("title"));assertFalse(row.has("replica_conflicts"));}catch(Exception error){throw new AssertionError(error);}});
         }
     }
-    @Test public void multiplePairedComputersOfferAnExplicitToolDestination()throws Exception {
+    @Test public void multiplePairedComputersDoNotChangeThePhonesOwnModelSettings()throws Exception {
         try(ActivityScenario<MainActivity> scenario=ActivityScenario.launch(MainActivity.class)){
             scenario.onActivity(activity->{try{
                 LocalScheduleStore store=(LocalScheduleStore)field(activity,"scheduleStore");
@@ -60,11 +60,17 @@ public class PeerNativeUiInstrumentedTest {
                     TestPeer peer=new TestPeer();String challenge=PeerIdentity.challenge();JSONObject proof=peer.proof(challenge,store.deviceId());proof.getJSONObject("device").put("name",i==0?"工作电脑 A":"个人电脑 B");
                     store.registerPeer("http://127.0.0.1:"+(41001+i)+"/",PeerIdentity.verify(proof,challenge,store.deviceId(),null,null,null),UUID.randomUUID().toString(),proof.getJSONObject("capabilities"));
                 }
-                activity.findViewById(R.id.offline_online).performClick();
+                activity.findViewById(R.id.offline_model_settings).performClick();
             }catch(Exception error){throw new AssertionError(error);}});
-            waitText("选择运行工具的电脑");
-            scenario.onActivity(activity->{boolean clicked=false;for(android.view.View root:android.view.inspector.WindowInspector.getGlobalWindowViews())if(selectListItem(root,"个人电脑 B")){clicked=true;break;}assertTrue("Choose the visible computer row",clicked);});
-            scenario.onActivity(activity->assertEquals("http://127.0.0.1:41002/",field(activity,"serverAddress")));
+            scenario.onActivity(activity->{
+                boolean found=false;
+                for(android.view.View root:android.view.inspector.WindowInspector.getGlobalWindowViews())if(root.findViewById(R.id.model_base_url)!=null){
+                    found=true;String address=((android.widget.EditText)root.findViewById(R.id.model_base_url)).getText().toString();
+                    assertFalse("Model endpoint is independent of paired computers",address.contains("41001")||address.contains("41002"));
+                    assertNotNull(root.findViewById(R.id.model_api_key));
+                }
+                assertTrue("Local model settings must open without a computer chooser",found);
+            });
         }
     }
     private boolean selectListItem(android.view.View view,String label){

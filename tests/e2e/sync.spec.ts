@@ -78,7 +78,9 @@ test("native pairing receives a revocable bearer and a signed identity bound to 
     expect(verify("sha256", Buffer.from(content), { key: Buffer.from(data.identity.public_key, "base64"), format: "der", type: "spki" }, Buffer.from(data.identity.signature, "base64"))).toBe(true);
     const native = await playwright.request.newContext({ baseURL, extraHTTPHeaders: { Authorization: `Bearer ${data.device_token}` } });
     try {
-      expect((await native.post("/api/devices/web-session", { data: {} })).status()).toBe(200);
+      const denied = await native.post("/api/devices/web-session", { data: {} });
+      expect(denied.status()).toBe(403);
+      expect((await denied.json()).error.code).toBe("SYNC_ONLY_DEVICE");
       expect((await (await native.get("/api/devices/info")).json()).space_id).toBe(owner.space_id);
       expect((await native.delete(`/api/devices/${data.pairing_id}`)).status()).toBe(200);
       expect((await native.get("/api/devices/info")).status()).toBe(401);

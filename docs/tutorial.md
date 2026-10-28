@@ -1,8 +1,8 @@
 # 打开就记，需要同步时再扫码
 
-顺手排 v2.1.0-beta.1 不需要日程账号、邮箱或密码。电脑打开应用即可使用本机日程；手机安装后也能独立新增、修改、完成、删除和搜索，电脑不在线时照常记录。
+顺手排 v2.1.0-beta.2 不需要日程账号、邮箱或密码。电脑打开应用即可使用本机日程；手机安装后也能独立新增、修改、完成、删除和搜索，电脑不在线时照常记录。
 
-[Windows 安装器](https://github.com/G-E-E-D/shunshoupai/releases/download/v2.1.0-beta.1/shunshoupai-desktop-v2.1.0-beta.1-setup.exe) · [Android APK](https://github.com/G-E-E-D/shunshoupai/releases/download/v2.1.0-beta.1/shunshoupai-android-v2.1.0-beta.1.apk) · [发布页](https://github.com/G-E-E-D/shunshoupai/releases/tag/v2.1.0-beta.1)
+[Windows 安装器](https://github.com/G-E-E-D/shunshoupai/releases/download/v2.1.0-beta.2/shunshoupai-desktop-v2.1.0-beta.2-setup.exe) · [Android APK](https://github.com/G-E-E-D/shunshoupai/releases/download/v2.1.0-beta.2/shunshoupai-android-v2.1.0-beta.2.apk) · [发布页](https://github.com/G-E-E-D/shunshoupai/releases/tag/v2.1.0-beta.2)
 
 ## 先把安排记下来
 
@@ -18,7 +18,7 @@ Windows 安装包包含原生 Qt 界面、Go 和本机数据库服务，不用�
 
 ## 任意两台设备接着用
 
-1. 两端都更新到 v2.1.0-beta.1，并连接同一个可信 Wi-Fi。
+1. 两端都更新到 v2.1.0-beta.2，并连接同一个可信 Wi-Fi。
 2. 其中一台电脑或手机打开“配对设备”，展示自己的二维码或配对链接。
 3. 另一台设备扫码或粘贴配对链接，阅读共享范围并确认。
 4. 配对后自动尝试合并。对方离线时继续在本机记录；安卓应用需保持前台才能接收同步。
@@ -31,9 +31,9 @@ Windows 安装版服务端口为 **43127**，同步时电脑应用需运行，�
 
 ## 需要智能整理时
 
-电脑点击“模型设置”；手机先连接电脑，再打开“电脑工具”，在网页的“设备与同步”中进入模型设置。填写服务商提供的 Base URL、模型名称和 API Key，先测试，再保存。测试会发起一次模型请求，可能消耗服务商额度。
+电脑和手机都直接打开本机“模型设置”，不需要配对另一台设备。填写服务商提供的 Base URL、模型名称和 API Key，先测试，再保存。测试会发起一次模型请求，可能消耗服务商额度。
 
-提示词由程序固定。模型 Key 加密保存在当前电脑，页面只显示掩码；配对设备可以使用这份配置。手机的网页智能整理和模型设置需要电脑在线，离线 AI 尚未提供。详见[模型设置](model-settings.md)。
+提示词由程序固定。模型 Key 加密保存在当前设备，页面只显示掩码；配对不会分享或借用这份配置。手机直接连接自己配置的模型服务；无网络时仍可选择本机规则整理，当前没有手机内置离线大模型。详见[模型设置](model-settings.md)。
 
 ## 升级和边界
 

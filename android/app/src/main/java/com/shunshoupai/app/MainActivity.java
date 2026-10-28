@@ -1,14 +1,10 @@
 package com.shunshoupai.app;
 
-import android.annotation.SuppressLint;
 import android.app.AlertDialog;
 import android.content.ActivityNotFoundException;
-import android.content.Intent;
+import android.content.Context;
 import android.content.SharedPreferences;
-import android.content.pm.ApplicationInfo;
 import android.graphics.Insets;
-import android.net.Uri;
-import android.net.http.SslError;
 import android.os.Build;
 import android.os.Bundle;
 import android.os.Handler;
@@ -17,211 +13,79 @@ import android.view.View;
 import android.view.ViewGroup;
 import android.view.WindowInsets;
 import android.view.WindowInsetsController;
-import android.view.inputmethod.EditorInfo;
 import android.view.inputmethod.InputMethodManager;
-import android.webkit.CookieManager;
-import android.webkit.RenderProcessGoneDetail;
-import android.webkit.SslErrorHandler;
-import android.webkit.WebChromeClient;
-import android.webkit.WebResourceError;
-import android.webkit.WebResourceRequest;
-import android.webkit.WebResourceResponse;
-import android.webkit.WebSettings;
-import android.webkit.WebStorage;
-import android.webkit.WebView;
-import android.webkit.WebViewClient;
 import android.widget.Button;
 import android.widget.EditText;
 import android.widget.FrameLayout;
-import android.widget.ProgressBar;
+import android.widget.LinearLayout;
 import android.widget.TextView;
 import android.widget.Toast;
-import android.widget.LinearLayout;
-
 import androidx.activity.ComponentActivity;
 import androidx.activity.OnBackPressedCallback;
 import androidx.activity.result.ActivityResultLauncher;
-
 import com.google.zxing.client.android.Intents;
 import com.journeyapps.barcodescanner.ScanContract;
 import com.journeyapps.barcodescanner.ScanOptions;
 
-import java.net.URI;
-
+/** Every daily workflow is native and local. Pairing is only used to replicate schedules. */
 public final class MainActivity extends ComponentActivity {
-    private static final String PREFS = "connection";
-    private static final String SERVER_KEY = "server_url";
-    private static final String STATE_SERVER = "trusted_server";
-    private static final String STATE_ACTIVE = "web_active";
-    private static final String STATE_COMPATIBILITY = "compatibility_rendering";
-
-    private final Handler handler = new Handler(Looper.getMainLooper());
+    private static final String PREFS="connection", SERVER_KEY="server_url";
+    private final Handler handler=new Handler(Looper.getMainLooper());
     private SharedPreferences preferences;
     private View setupScreen;
-    private View webScreen;
-    private View errorPanel;
-    private View loadingOverlay;
-    private EditText serverInput;
     private TextView connectionError;
-    private TextView errorMessage;
-    private TextView serverSummary;
     private Button connectButton;
-    private ProgressBar progress;
-    private WebView webView;
-    private String serverAddress = "";
-    private String mainFrameUrl = "";
-    private boolean mainFrameFailed;
-    private boolean changingServer;
-    private boolean pageReady;
-    private boolean checkingContent;
-    private boolean compatibilityRendering;
-    private boolean clearHistoryOnReady;
-    private boolean tryingLegacyRoot;
-    private String pendingPairingFragment = "";
-    private int loadGeneration;
     private OfflineScheduleView offlineScreen;
     private LocalScheduleStore scheduleStore;
     private ScheduleSync scheduleSync;
     private DeviceHostRuntime deviceHost;
     private DevicePairingDialog pairingDialog;
-    private boolean foreground;
-    private final Runnable syncTick = new Runnable() {
-        @Override public void run() {
-            if (!foreground) return;
-            syncSchedules();
-            handler.postDelayed(this, 15_000);
-        }
-    };
-
-    private final ActivityResultLauncher<ScanOptions> qrScanner = registerForActivityResult(new ScanContract(), result -> {
-        if (result.getContents() != null) {
-            handleScanResult(result.getContents());
-        } else if (result.getOriginalIntent() != null
-                && result.getOriginalIntent().getBooleanExtra(Intents.Scan.MISSING_CAMERA_PERMISSION, false)) {
-            showScanHelp(R.string.scan_camera_denied);
-        } else {
-            handleScanResult(null);
-        }
+    private LocalPlanningEngine planningEngine;
+    private ReminderScheduler reminders;
+    private NativePlanningDialog planningDialog;
+    private NativeModelSettingsDialog modelDialog;
+    private boolean foreground,changingServer;
+    private final Runnable syncTick=new Runnable(){@Override public void run(){if(!foreground)return;syncSchedules();handler.postDelayed(this,15000);}};
+    private final ActivityResultLauncher<ScanOptions> qrScanner=registerForActivityResult(new ScanContract(),result->{
+        if(result.getContents()!=null)handleScanResult(result.getContents());
+        else if(result.getOriginalIntent()!=null&&result.getOriginalIntent().getBooleanExtra(Intents.Scan.MISSING_CAMERA_PERMISSION,false))showScanHelp(R.string.scan_camera_denied);
+        else handleScanResult(null);
     });
 
-    private final Runnable loadTimeout = () -> {
-        if (webView != null && !pageReady && !mainFrameFailed) {
-            webView.stopLoading();
-            showLoadError(getString(R.string.webview_not_ready));
-        }
-    };
-    private final Runnable contentCheck = this::checkContentReady;
-
-    @Override
-    protected void onCreate(Bundle state) {
-        super.onCreate(state);
-        setContentView(R.layout.activity_main);
-        applyWindowInsets();
-        preferences = getSharedPreferences(PREFS, MODE_PRIVATE);
-        setupScreen = findViewById(R.id.setup_screen);
-        webScreen = findViewById(R.id.web_screen);
-        errorPanel = findViewById(R.id.error_panel);
-        loadingOverlay = findViewById(R.id.loading_overlay);
-        serverInput = findViewById(R.id.server_url);
-        connectionError = findViewById(R.id.connection_error);
-        errorMessage = findViewById(R.id.error_message);
-        serverSummary = findViewById(R.id.server_summary);
-        connectButton = findViewById(R.id.connect_button);
-        progress = findViewById(R.id.loading_progress);
-        webView = findViewById(R.id.web_view);
-        compatibilityRendering = state != null && state.getBoolean(STATE_COMPATIBILITY, false);
-        configureWebView();
-
-        scheduleStore = new LocalScheduleStore(this);
-        scheduleStore.initialize(preferences.getString(SERVER_KEY, ""));
-        deviceHost = new DeviceHostRuntime(this, scheduleStore, handler, () -> {
-            if (isFinishing() || isDestroyed() || offlineScreen == null) return;
-            offlineScreen.refresh();
-            if (setupScreen.getVisibility() == View.VISIBLE) renderPeers();
-        });
-        scheduleSync = new ScheduleSync(this, scheduleStore, handler, deviceHost, (origin, scope, message, pairingRequired) -> {
-            if (changingServer) return;
-            offlineScreen.setStatus(message);
-            if (setupScreen.getVisibility() == View.VISIBLE) renderPeers();
-        });
-        offlineScreen = new OfflineScheduleView(this, scheduleStore, this::showConnectionSettings, this::reloadService, this::syncSchedules);
-        offlineScreen.setId(R.id.offline_screen);
-        offlineScreen.setScope(scheduleStore.activeScope());
-        ((FrameLayout) findViewById(R.id.root)).addView(offlineScreen, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
-
-        connectButton.setOnClickListener(view -> connectFromInput());
-        findViewById(R.id.scan_button).setOnClickListener(view -> startQrScanner());
-        findViewById(R.id.paste_pairing_link).setOnClickListener(view -> {
-            EditText input=new EditText(this);input.setHint("粘贴另一台设备的配对链接");input.setInputType(android.text.InputType.TYPE_CLASS_TEXT | android.text.InputType.TYPE_TEXT_VARIATION_URI);input.setSingleLine(true);
-            new AlertDialog.Builder(this).setTitle("粘贴配对链接").setView(input).setNegativeButton("取消",null).setPositiveButton("继续",(dialog,which)->handleScanResult(input.getText().toString())).show();
-        });
-        findViewById(R.id.show_pairing_code).setOnClickListener(view -> showPairingCode());
-        serverInput.setOnEditorActionListener((view, actionId, event) -> {
-            if (actionId == EditorInfo.IME_ACTION_GO) { connectFromInput(); return true; }
-            return false;
-        });
-        findViewById(R.id.toolbar_back).setOnClickListener(view -> navigateBack());
-        findViewById(R.id.toolbar_refresh).setOnClickListener(view -> reloadService());
-        findViewById(R.id.toolbar_settings).setOnClickListener(view -> showConnectionSettings());
-        findViewById(R.id.error_retry).setOnClickListener(view -> {
-            enableCompatibilityRendering();
-            reloadService();
-        });
-        findViewById(R.id.toolbar_refresh).setOnLongClickListener(view -> {
-            enableCompatibilityRendering();
-            reloadService();
-            Toast.makeText(this, R.string.compatibility_rendering, Toast.LENGTH_SHORT).show();
-            return true;
-        });
-        findViewById(R.id.error_settings).setOnClickListener(view -> showConnectionSettings());
-        findViewById(R.id.cancel_connection).setOnClickListener(view -> { cancelPairing(); showOfflineScreen(); });
-        findViewById(R.id.unpair_device).setOnClickListener(view -> unpairDevice());
-        findViewById(R.id.local_spaces).setOnClickListener(view -> chooseLocalSpace());
-        findViewById(R.id.error_offline).setOnClickListener(view -> showOfflineScreen());
-        getOnBackPressedDispatcher().addCallback(this, new OnBackPressedCallback(true) {
-            @Override public void handleOnBackPressed() { navigateBack(); }
-        });
-
-        String saved = preferences.getString(SERVER_KEY, "");
-        if (saved != null && !saved.isEmpty()) {
-            try {
-                serverAddress = ServerAddress.normalize(saved);
-                serverInput.setText(serverAddress);
-            } catch (IllegalArgumentException error) {
-                preferences.edit().remove(SERVER_KEY).apply();
-                serverAddress = "";
-            }
-        }
-        if (!preferences.getBoolean("device_pairing_migrated", false)) {
-            CookieManager.getInstance().removeAllCookies(ignored -> CookieManager.getInstance().flush());
-            preferences.edit().putBoolean("device_pairing_migrated", true).apply();
-        }
+    @Override protected void onCreate(Bundle state){
+        super.onCreate(state);setContentView(R.layout.activity_main);applyWindowInsets();
+        preferences=getSharedPreferences(PREFS,MODE_PRIVATE);setupScreen=findViewById(R.id.setup_screen);connectionError=findViewById(R.id.connection_error);connectButton=findViewById(R.id.connect_button);
+        scheduleStore=new LocalScheduleStore(this);scheduleStore.initialize(preferences.getString(SERVER_KEY,""));planningEngine=new LocalPlanningEngine(this);
+        deviceHost=new DeviceHostRuntime(this,scheduleStore,handler,()->{if(isFinishing()||isDestroyed()||offlineScreen==null)return;offlineScreen.refresh();if(reminders!=null)reminders.refresh();if(setupScreen.getVisibility()==View.VISIBLE)renderPeers();});
+        scheduleSync=new ScheduleSync(this,scheduleStore,handler,deviceHost,(origin,scope,message,required)->{if(changingServer||isDestroyed())return;offlineScreen.setStatus(message);if(reminders!=null)reminders.refresh();if(setupScreen.getVisibility()==View.VISIBLE)renderPeers();});
+        offlineScreen=new OfflineScheduleView(this,scheduleStore,this::showConnectionSettings,this::showPlanning,this::syncSchedules);
+        offlineScreen.setModelAction(this::showModelSettings);
+        reminders=new ReminderScheduler(this,scheduleStore,message->{Toast.makeText(this,message,Toast.LENGTH_LONG).show();offlineScreen.setStatus(message);});
+        offlineScreen.setReminderAction(this::showReminderSettings);offlineScreen.setReminderEnabled(reminders.isEnabled());
+        offlineScreen.setId(R.id.offline_screen);offlineScreen.setScope(scheduleStore.activeScope());
+        ((FrameLayout)findViewById(R.id.root)).addView(offlineScreen,new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT,ViewGroup.LayoutParams.MATCH_PARENT));
+        connectButton.setOnClickListener(v->connectFromInput());findViewById(R.id.scan_button).setOnClickListener(v->startQrScanner());findViewById(R.id.show_pairing_code).setOnClickListener(v->showPairingCode());
+        findViewById(R.id.paste_pairing_link).setOnClickListener(v->{EditText input=new EditText(this);input.setHint("粘贴另一台设备的配对链接");input.setInputType(android.text.InputType.TYPE_CLASS_TEXT|android.text.InputType.TYPE_TEXT_VARIATION_URI);input.setSingleLine(true);new AlertDialog.Builder(this).setTitle("粘贴配对链接").setView(input).setNegativeButton("取消",null).setPositiveButton("继续",(d,w)->handleScanResult(input.getText().toString())).show();});
+        findViewById(R.id.cancel_connection).setOnClickListener(v->{cancelPairing();showOfflineScreen();});findViewById(R.id.unpair_device).setOnClickListener(v->unpairDevice());findViewById(R.id.local_spaces).setOnClickListener(v->chooseLocalSpace());
+        getOnBackPressedDispatcher().addCallback(this,new OnBackPressedCallback(true){@Override public void handleOnBackPressed(){if(changingServer)cancelPairing();if(offlineScreen.getVisibility()==View.VISIBLE)finish();else showOfflineScreen();}});
         showOfflineScreen();
-        if(state!=null)offlineScreen.restoreEditor(state.getString("offline_edit_id"));
+        if(state!=null){offlineScreen.restoreEditor(state.getString("offline_edit_id"));String panel=state.getString("local_panel","");if("planning".equals(panel))showPlanning();else if("model".equals(panel))showModelSettings();}
     }
-
-    private void syncSchedules() {
-        if (scheduleSync == null || changingServer || !foreground || offlineScreen == null) return;
-        if(webScreen.getVisibility()!=View.VISIBLE) scheduleSync.sync();
+    private void syncSchedules(){if(reminders!=null)reminders.refresh();if(scheduleSync==null||changingServer||!foreground)return;scheduleSync.sync();}
+    private void showOfflineScreen(){hideKeyboard();setupScreen.setVisibility(View.GONE);offlineScreen.setVisibility(View.VISIBLE);offlineScreen.refresh();syncSchedules();}
+    private void showPlanning(){
+        if(!scheduleStore.isPrimary(offlineScreen.scope())){Toast.makeText(this,"请回到主日程后整理，旧资料继续独立保留。",Toast.LENGTH_LONG).show();return;}
+        if(planningDialog!=null)planningDialog.close();
+        planningDialog=new NativePlanningDialog(this,scheduleStore,planningEngine,offlineScreen.scope(),java.time.LocalDate.now(LocalScheduleStore.ZONE),day->{offlineScreen.showDate(day);syncSchedules();});planningDialog.show();
     }
-
-    private void showOfflineScreen() {
-        hideKeyboard();
-        setupScreen.setVisibility(View.GONE);
-        webScreen.setVisibility(View.GONE);
-        offlineScreen.setVisibility(View.VISIBLE);
-        offlineScreen.refresh();
-        if (webView != null) {
-            webView.stopLoading();
-            webView.loadUrl("about:blank");
-            webView.onPause();
-            pageReady=false;
-            handler.removeCallbacks(loadTimeout);
-            handler.removeCallbacks(contentCheck);
-        }
-        syncSchedules();
+    private void showModelSettings(){if(modelDialog!=null)modelDialog.close();modelDialog=new NativeModelSettingsDialog(this,planningEngine,new androidx.lifecycle.ViewModelProvider(this).get(ModelSettingsDraft.class),()->offlineScreen.refresh());modelDialog.show();}
+    private void showReminderSettings(){
+        LinearLayout content=NativeUi.column(this);int p=NativeUi.dp(this,20);content.setPadding(p,0,p,p);
+        content.addView(NativeUi.text(this,"开启后，日程开始前5分钟会在手机上提示。与桌面一样，仅在顺手排保持前台时提醒；锁屏或退出后不会保证通知。",14));
+        android.widget.Switch enabled=new android.widget.Switch(this);enabled.setText("开启本机前台提醒");enabled.setTextSize(16);enabled.setMinHeight(NativeUi.dp(this,52));enabled.setChecked(reminders.isEnabled());content.addView(enabled);
+        enabled.setOnCheckedChangeListener((button,value)->{reminders.setEnabled(value);offlineScreen.setReminderEnabled(value);});
+        new AlertDialog.Builder(this).setTitle("本机提醒").setView(content).setPositiveButton("完成",null).show();
     }
-
     private void applyWindowInsets() {
         View root = findViewById(R.id.root);
         if (Build.VERSION.SDK_INT >= 30) {
@@ -253,130 +117,6 @@ public final class MainActivity extends ComponentActivity {
                 controller.setSystemBarsAppearance(light, light);
             }
         }
-    }
-
-    @SuppressWarnings("deprecation")
-    // React requires JavaScript. Navigation is restricted to the configured
-    // origin, file/content access is disabled, and no native JS bridge exists.
-    @SuppressLint("SetJavaScriptEnabled")
-    private void configureWebView() {
-        WebSettings settings = webView.getSettings();
-        settings.setJavaScriptEnabled(true);
-        settings.setDomStorageEnabled(true);
-        settings.setAllowFileAccess(false);
-        settings.setAllowContentAccess(false);
-        settings.setAllowFileAccessFromFileURLs(false);
-        settings.setAllowUniversalAccessFromFileURLs(false);
-        settings.setMixedContentMode(WebSettings.MIXED_CONTENT_NEVER_ALLOW);
-        settings.setJavaScriptCanOpenWindowsAutomatically(false);
-        settings.setSupportMultipleWindows(true);
-        settings.setSafeBrowsingEnabled(true);
-        settings.setSaveFormData(false);
-        settings.setSavePassword(false);
-        settings.setUserAgentString(settings.getUserAgentString() + " ShunshoupaiAndroid/" + BuildConfig.VERSION_NAME);
-        if (compatibilityRendering) webView.setLayerType(View.LAYER_TYPE_SOFTWARE, null);
-        CookieManager.getInstance().setAcceptCookie(true);
-        CookieManager.getInstance().setAcceptThirdPartyCookies(webView, false);
-        WebView.setWebContentsDebuggingEnabled((getApplicationInfo().flags & ApplicationInfo.FLAG_DEBUGGABLE) != 0);
-        webView.setWebChromeClient(new WebChromeClient() {
-            @Override public void onProgressChanged(WebView view, int value) {
-                if (view != webView) return;
-                // Resource loading at 100% does not prove React hydrated or
-                // produced a visible workbench. Keep the native loader until
-                // the explicit DOM readiness check succeeds.
-                progress.setProgress(pageReady ? 100 : Math.min(value, 95));
-            }
-
-            @Override public boolean onCreateWindow(WebView view, boolean dialog, boolean userGesture, android.os.Message resultMessage) {
-                if (view != webView) return false;
-                // User-tapped target=_blank links open in the browser, never in a
-                // second privileged WebView. Script-created windows are denied.
-                String destination = view.getHitTestResult().getExtra();
-                if (userGesture && destination != null) openExternal(destination);
-                return false;
-            }
-        });
-        webView.setWebViewClient(new WebViewClient() {
-            @Override public boolean shouldOverrideUrlLoading(WebView view, WebResourceRequest request) {
-                if (view != webView) return true;
-                String destination = request.getUrl().toString();
-                if (ServerAddress.sameOrigin(serverAddress, destination)) return false;
-                if (request.isForMainFrame() && request.hasGesture()) openExternal(destination);
-                else if (request.isForMainFrame()) showLoadError(getString(R.string.unsafe_redirect));
-                return true;
-            }
-
-            @Override public void onPageStarted(WebView view, String url, android.graphics.Bitmap icon) {
-                if (view != webView || changingServer || "about:blank".equals(url)) return;
-                if (!ServerAddress.sameOrigin(serverAddress, url)) {
-                    view.stopLoading();
-                    showLoadError(getString(R.string.unsafe_redirect));
-                    return;
-                }
-                mainFrameUrl = url.split("#", 2)[0];
-                loadGeneration++;
-                checkingContent = false;
-                pageReady = false;
-                mainFrameFailed = false;
-                errorPanel.setVisibility(View.GONE);
-                loadingOverlay.setVisibility(View.VISIBLE);
-                progress.setProgress(0);
-                progress.setVisibility(View.VISIBLE);
-                handler.removeCallbacks(loadTimeout);
-                handler.removeCallbacks(contentCheck);
-                handler.postDelayed(loadTimeout, 25_000);
-            }
-
-            @Override public void onPageCommitVisible(WebView view, String url) {
-                if (view == webView && !changingServer && ServerAddress.sameOrigin(serverAddress, url)) checkContentReady();
-            }
-
-            @Override public void onPageFinished(WebView view, String url) {
-                if (view != webView || changingServer || !ServerAddress.sameOrigin(serverAddress, url)) return;
-                CookieManager.getInstance().flush();
-                if (!mainFrameFailed) checkContentReady();
-            }
-
-            @Override public void onReceivedError(WebView view, WebResourceRequest request, WebResourceError error) {
-                if (view == webView && request.isForMainFrame() && currentDocument(request.getUrl().toString())) showLoadError(getString(R.string.error_default));
-            }
-
-            @Override public void onReceivedHttpError(WebView view, WebResourceRequest request, WebResourceResponse response) {
-                if (view != webView || !request.isForMainFrame() || !currentDocument(request.getUrl().toString())) return;
-                String path = request.getUrl().getPath();
-                if (response.getStatusCode() == 404 && !tryingLegacyRoot && ("/mobile".equals(path) || "/mobile/".equals(path))) {
-                    // Earlier installed desktop versions only serve the app at
-                    // their root. Retry that exact trusted origin once; retain
-                    // this one-use fragment in memory only for this request.
-                    tryingLegacyRoot = true;
-                    view.stopLoading();
-                    loadWorkspaceUrl(serverAddress + pendingPairingFragment);
-                    return;
-                }
-                showLoadError(getString(R.string.http_error, response.getStatusCode()));
-            }
-
-            @Override public void onReceivedSslError(WebView view, SslErrorHandler sslHandler, SslError error) {
-                sslHandler.cancel();
-                if (view != webView) return;
-                if (error.getUrl().equals(mainFrameUrl) || error.getUrl().equals(view.getUrl())) {
-                    showLoadError(getString(R.string.ssl_error));
-                }
-            }
-
-            @Override public boolean onRenderProcessGone(WebView view, RenderProcessGoneDetail detail) {
-                if (view != webView) return true;
-                compatibilityRendering = true;
-                loadGeneration++;
-                handler.removeCallbacks(loadTimeout);
-                handler.removeCallbacks(contentCheck);
-                if (view.getParent() instanceof ViewGroup) ((ViewGroup) view.getParent()).removeView(view);
-                view.destroy();
-                webView = null;
-                showLoadError(getString(R.string.webview_crashed));
-                return true;
-            }
-        });
     }
 
     private void startQrScanner() {
@@ -412,7 +152,6 @@ public final class MainActivity extends ComponentActivity {
             showScanHelp(R.string.scan_invalid);
             return;
         }
-        serverInput.setText(scanned.serviceRoot);
         connectionError.setVisibility(View.GONE);
         if (!scanned.hasPairing) { showScanHelp(R.string.scan_pair_required); return; }
         showConnectionSettings();
@@ -461,7 +200,6 @@ public final class MainActivity extends ComponentActivity {
         changingServer = true;
         connectButton.setEnabled(false);
         findViewById(R.id.scan_button).setEnabled(false);
-        if (webView != null) { webView.stopLoading(); webView.loadUrl("about:blank"); }
         connectionError.setText("正在验证设备并配对…本机日程仍可使用。");
         connectionError.setVisibility(View.VISIBLE);
         scheduleSync.pair(scanned, (origin, scope, error) -> {
@@ -473,9 +211,7 @@ public final class MainActivity extends ComponentActivity {
                 connectionError.setText(error); connectionError.setVisibility(View.VISIBLE);
                 return;
             }
-            serverAddress = origin;
             preferences.edit().putString(SERVER_KEY, origin).apply();
-            serverInput.setText(origin);
             scheduleStore.setActiveScope(scope);
             offlineScreen.setScope(scope);
             offlineScreen.setStatus("设备已配对，正在合并两端日程");
@@ -545,222 +281,14 @@ public final class MainActivity extends ComponentActivity {
     }
     private void showConnectionSettings() {
         hideKeyboard(); scheduleSync.invalidate();
-        offlineScreen.setVisibility(View.GONE);webScreen.setVisibility(View.GONE);setupScreen.setVisibility(View.VISIBLE);
+        offlineScreen.setVisibility(View.GONE);setupScreen.setVisibility(View.VISIBLE);
         connectionError.setVisibility(View.GONE);renderPeers();
         findViewById(R.id.cancel_connection).setVisibility(View.VISIBLE);
-        if(webView!=null){webView.stopLoading();webView.onPause();}
     }
 
-    private void showWebScreen() {
-        if (serverAddress.isEmpty()) return;
-        hideKeyboard();
-        if(webScreen.getVisibility()!=View.VISIBLE)scheduleSync.invalidate();
-        offlineScreen.setVisibility(View.GONE);
-        setupScreen.setVisibility(View.GONE);
-        webScreen.setVisibility(View.VISIBLE);
-        try {
-            URI uri = URI.create(serverAddress);
-            serverSummary.setText(getString(uri.getScheme().equals("https")
-                ? R.string.server_summary_https : R.string.server_summary_http, uri.getRawAuthority()));
-        } catch (IllegalArgumentException ignored) { serverSummary.setText(R.string.empty_server); }
-        if (webView != null) webView.onResume();
-    }
-
-    private void reloadService() {
-        if(changingServer)return;
-        try {
-            java.util.List<org.json.JSONObject> computers=new java.util.ArrayList<>();
-            for(org.json.JSONObject peer:scheduleStore.peers())if(peer.optBoolean("enabled")&&peer.getJSONObject("capabilities").optBoolean("web"))computers.add(peer);
-            if(computers.isEmpty()){showConnectionSettings();connectionError.setText("电脑工具需要一台已配对的电脑。手机之间仍可直接同步日程。");connectionError.setVisibility(View.VISIBLE);return;}
-            if(webScreen.getVisibility()==View.VISIBLE)for(org.json.JSONObject peer:computers)if(serverAddress.equals(peer.getString("origin"))){openComputer(peer);return;}
-            if(computers.size()==1){openComputer(computers.get(0));return;}
-            String[] names=new String[computers.size()];for(int i=0;i<names.length;i++)names[i]=computers.get(i).getString("name");
-            new AlertDialog.Builder(this).setTitle("选择运行工具的电脑").setItems(names,(dialog,which)->openComputer(computers.get(which))).setNegativeButton("返回",null).show();
-        }catch(Exception error){showConnectionSettings();}
-    }
-    private void openComputer(org.json.JSONObject peer) {
-        serverAddress=peer.optString("origin");
-        scheduleSync.openWeb(peer.optString("peer_id"),error->{
-            if(isFinishing()||isDestroyed())return;
-            if(error!=null){showConnectionSettings();connectionError.setText(error);connectionError.setVisibility(View.VISIBLE);}
-            else reloadService(null);
-        });
-    }
-
-    private void reloadService(String initialUrl) {
-        if (serverAddress.isEmpty() || changingServer) return;
-        if (webView == null) {
-            webView = new WebView(this);
-            webView.setId(R.id.web_view);
-            FrameLayout container = findViewById(R.id.web_container);
-            container.addView(webView, 0, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
-            configureWebView();
-        }
-        showWebScreen();
-        pendingPairingFragment = "";
-        tryingLegacyRoot = false;
-        loadWorkspaceUrl(serverAddress + "mobile");
-    }
-
-    private void loadWorkspaceUrl(String url) {
-        loadGeneration++;
-        mainFrameUrl = url.split("#", 2)[0];
-        pageReady = false;
-        checkingContent = false;
-        mainFrameFailed = false;
-        errorPanel.setVisibility(View.GONE);
-        loadingOverlay.setVisibility(View.VISIBLE);
-        progress.setProgress(0);
-        progress.setVisibility(View.VISIBLE);
-        handler.removeCallbacks(loadTimeout);
-        handler.postDelayed(loadTimeout, 25_000);
-        webView.loadUrl(url);
-    }
-
-    private boolean currentDocument(String url) {
-        return url != null && url.split("#", 2)[0].equals(mainFrameUrl);
-    }
-
-    private void enableCompatibilityRendering() {
-        compatibilityRendering = true;
-        if (webView != null) webView.setLayerType(View.LAYER_TYPE_SOFTWARE, null);
-    }
-
-    private void checkContentReady() {
-        if (webView == null || changingServer || mainFrameFailed || pageReady || checkingContent) return;
-        final WebView expected = webView;
-        final int generation = loadGeneration;
-        if (!ServerAddress.sameOrigin(serverAddress, expected.getUrl())) return;
-        checkingContent = true;
-        try { expected.evaluateJavascript("(function(){"
-            + "if(document.querySelector('[data-shunshoupai-error]'))return 'error';"
-            + "var app=document.querySelector('.app-shell');"
-            + "if(document.documentElement.getAttribute('data-shunshoupai-ready')==='true'&&app&&app.getBoundingClientRect().height>0)return 'ready';"
-            + (tryingLegacyRoot ? "if(app&&app.getBoundingClientRect().height>0){var buttons=app.querySelectorAll('header button');for(var i=0;i<buttons.length;i++){var keys=Object.keys(buttons[i]);for(var j=0;j<keys.length;j++){if(keys[j].indexOf('__reactProps$')===0&&buttons[i][keys[j]]&&typeof buttons[i][keys[j]].onClick==='function')return 'ready'}}}" : "")
-            + "if(!document.querySelector('script[src*=\"_next\"]')&&document.body&&document.body.innerText.trim().length>0)return 'ready';"
-            + "return 'waiting';})()", value -> {
-                checkingContent = false;
-                if (isFinishing() || isDestroyed() || expected != webView || generation != loadGeneration || changingServer || mainFrameFailed) return;
-                if ("\"ready\"".equals(value)) {
-                    // DOM readiness and a drawable WebView frame are separate.
-                    // Keep the visible native loading state until Chromium has
-                    // committed a frame reflecting that DOM (API 23+, min 26).
-                    checkingContent = true;
-                    expected.postVisualStateCallback(generation, new WebView.VisualStateCallback() {
-                        @Override public void onComplete(long requestId) {
-                            checkingContent = false;
-                            if (isFinishing() || isDestroyed() || expected != webView || generation != loadGeneration || changingServer || mainFrameFailed) return;
-                            pageReady = true;
-                            pendingPairingFragment = "";
-                            handler.removeCallbacks(loadTimeout);
-                            handler.removeCallbacks(contentCheck);
-                            progress.setVisibility(View.GONE);
-                            loadingOverlay.setVisibility(View.GONE);
-                            errorPanel.setVisibility(View.GONE);
-                            if (clearHistoryOnReady) { expected.clearHistory(); clearHistoryOnReady = false; }
-                            expected.requestLayout();
-                            expected.invalidate();
-                            handler.postDelayed(MainActivity.this::syncSchedules, 1_000);
-                        }
-                    });
-                } else if ("\"error\"".equals(value)) showLoadError(getString(R.string.webview_not_ready));
-                else { handler.removeCallbacks(contentCheck); handler.postDelayed(contentCheck, 400); }
-            });
-        } catch (IllegalStateException unavailableRenderer) {
-            checkingContent = false;
-            showLoadError(getString(R.string.webview_crashed));
-        }
-    }
-
-    private void showLoadError(String message) {
-        mainFrameFailed = true;
-        pendingPairingFragment = "";
-        handler.removeCallbacks(loadTimeout);
-        handler.removeCallbacks(contentCheck);
-        progress.setVisibility(View.GONE);
-        loadingOverlay.setVisibility(View.GONE);
-        errorMessage.setText(message);
-        errorPanel.setVisibility(View.VISIBLE);
-    }
-
-    private void openExternal(String destination) {
-        try {
-            URI uri = URI.create(destination);
-            String root = ServerAddress.normalize(uri.getScheme() + "://" + uri.getRawAuthority());
-            if (!ServerAddress.sameOrigin(root, destination)) {
-                Toast.makeText(this, R.string.blocked_navigation, Toast.LENGTH_SHORT).show();
-                return;
-            }
-            startActivity(new Intent(Intent.ACTION_VIEW, Uri.parse(destination)).addCategory(Intent.CATEGORY_BROWSABLE));
-        } catch (IllegalArgumentException error) {
-            Toast.makeText(this, R.string.blocked_navigation, Toast.LENGTH_SHORT).show();
-        } catch (ActivityNotFoundException error) {
-            Toast.makeText(this, R.string.external_link_unavailable, Toast.LENGTH_SHORT).show();
-        }
-    }
-
-    private void hideKeyboard() {
-        View focus = getCurrentFocus();
-        if (focus != null) {
-            ((InputMethodManager) getSystemService(INPUT_METHOD_SERVICE)).hideSoftInputFromWindow(focus.getWindowToken(), 0);
-            focus.clearFocus();
-        }
-    }
-
-    private void navigateBack() {
-        if (changingServer) cancelPairing();
-        if (offlineScreen.getVisibility() == View.VISIBLE) finish();
-        else showOfflineScreen();
-    }
-
-    @Override protected void onSaveInstanceState(Bundle state) {
-        state.putString("offline_edit_id",offlineScreen.editingId());
-        state.putString(STATE_SERVER, serverAddress);
-        state.putBoolean(STATE_ACTIVE, webScreen.getVisibility() == View.VISIBLE);
-        state.putBoolean(STATE_COMPATIBILITY, compatibilityRendering);
-        // Reload /mobile using its persistent HttpOnly cookie after recreation.
-        // Never save WebView display state or a one-time QR URL into the Bundle.
-        super.onSaveInstanceState(state);
-    }
-
-    @Override protected void onPause() {
-        foreground = false;
-        cancelPairing();
-        if(scheduleSync!=null)scheduleSync.invalidate();
-        if(pairingDialog!=null){pairingDialog.dismiss();pairingDialog=null;}
-        if(deviceHost!=null)deviceHost.stop();
-        handler.removeCallbacks(syncTick);
-        if (webView != null) webView.onPause();
-        CookieManager.getInstance().flush();
-        super.onPause();
-    }
-
-    @Override protected void onResume() {
-        super.onResume();
-        foreground = true;
-        startDeviceHost();
-        if(setupScreen.getVisibility()==View.VISIBLE)renderPeers();
-        handler.removeCallbacks(syncTick);
-        handler.post(syncTick);
-        if (webView != null && webScreen != null && webScreen.getVisibility() == View.VISIBLE) {
-            webView.onResume();
-            webView.invalidate();
-            webView.requestLayout();
-            checkContentReady();
-        }
-    }
-
-    @Override protected void onDestroy() {
-        if(pairingDialog!=null)pairingDialog.dismiss();
-        if(deviceHost!=null)deviceHost.stop();
-        if (offlineScreen != null) offlineScreen.destroy();
-        if (scheduleSync != null) scheduleSync.close();
-        handler.removeCallbacksAndMessages(null);
-        if (webView != null) {
-            webView.stopLoading();
-            if (webView.getParent() instanceof ViewGroup) ((ViewGroup) webView.getParent()).removeView(webView);
-            webView.destroy();
-        }
-        super.onDestroy();
-    }
+    private void hideKeyboard(){View focus=getCurrentFocus();if(focus!=null){((InputMethodManager)getSystemService(Context.INPUT_METHOD_SERVICE)).hideSoftInputFromWindow(focus.getWindowToken(),0);focus.clearFocus();}}
+    @Override protected void onSaveInstanceState(Bundle state){state.putString("offline_edit_id",offlineScreen.editingId());state.putString("local_panel",planningDialog!=null&&planningDialog.isShowing()?"planning":modelDialog!=null&&modelDialog.isShowing()?"model":"");super.onSaveInstanceState(state);}
+    @Override protected void onPause(){foreground=false;if(reminders!=null)reminders.onForeground(false);handler.removeCallbacks(syncTick);cancelPairing();if(scheduleSync!=null)scheduleSync.invalidate();if(pairingDialog!=null){pairingDialog.dismiss();pairingDialog=null;}if(deviceHost!=null)deviceHost.stop();super.onPause();}
+    @Override protected void onResume(){super.onResume();foreground=true;if(reminders!=null)reminders.onForeground(true);startDeviceHost();if(setupScreen.getVisibility()==View.VISIBLE)renderPeers();handler.removeCallbacks(syncTick);handler.post(syncTick);}
+    @Override protected void onDestroy(){if(reminders!=null)reminders.close();if(pairingDialog!=null)pairingDialog.dismiss();if(planningDialog!=null)planningDialog.close();if(modelDialog!=null)modelDialog.close();if(planningEngine!=null)planningEngine.cancel();if(deviceHost!=null)deviceHost.stop();if(offlineScreen!=null)offlineScreen.destroy();if(scheduleSync!=null)scheduleSync.close();handler.removeCallbacksAndMessages(null);super.onDestroy();}
 }

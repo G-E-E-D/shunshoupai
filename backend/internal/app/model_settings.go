@@ -301,7 +301,7 @@ func (s *Store) consumeModelQuota(g *Grant) error {
 }
 func (s *Server) registerModels() {
 	s.route("GET /api/model-settings", func(w http.ResponseWriter, r *http.Request) (any, error) {
-		g, e := s.requireAuth(r)
+		g, e := s.requireLocalFeature(r)
 		if e != nil {
 			return nil, e
 		}
@@ -315,7 +315,7 @@ func (s *Server) registerModels() {
 		return Object{"settings": s.Store.modelInfo(v)}, nil
 	})
 	s.route("PUT /api/model-settings", func(w http.ResponseWriter, r *http.Request) (any, error) {
-		g, e := s.requireAuth(r)
+		g, e := s.requireLocalFeature(r)
 		if e != nil {
 			return nil, e
 		}
@@ -333,7 +333,7 @@ func (s *Server) registerModels() {
 		return Object{"settings": result}, e
 	})
 	s.route("DELETE /api/model-settings", func(w http.ResponseWriter, r *http.Request) (any, error) {
-		g, e := s.requireAuth(r)
+		g, e := s.requireLocalFeature(r)
 		if e != nil {
 			return nil, e
 		}
@@ -353,7 +353,7 @@ func (s *Server) registerModels() {
 		return Object{"settings": result}, e
 	})
 	s.route("POST /api/model-settings/test", func(w http.ResponseWriter, r *http.Request) (any, error) {
-		g, e := s.requireAuth(r)
+		g, e := s.requireLocalFeature(r)
 		if e != nil {
 			return nil, e
 		}

@@ -4,4 +4,26 @@
     <item name="offline_add" type="id" />
     <item name="offline_connect" type="id" />
     <item name="offline_online" type="id" />
+    <item name="offline_model_settings" type="id" />
+    <item name="offline_tab_day" type="id" />
+    <item name="offline_tab_week" type="id" />
+    <item name="offline_tab_completed" type="id" />
+    <item name="offline_month" type="id" />
+    <item name="offline_reminders" type="id" />
+    <item name="planner_input" type="id" />
+    <item name="planner_parse" type="id" />
+    <item name="planner_commit" type="id" />
+    <item name="planner_rows" type="id" />
+    <item name="planner_warnings" type="id" />
+    <item name="planner_source" type="id" />
+    <item name="planner_rules" type="id" />
+    <item name="model_provider" type="id" />
+    <item name="model_base_url" type="id" />
+    <item name="model_name" type="id" />
+    <item name="model_api_key" type="id" />
+    <item name="model_timeout" type="id" />
+    <item name="model_save" type="id" />
+    <item name="model_test" type="id" />
+    <item name="model_clear_key" type="id" />
+    <item name="model_private_network" type="id" />
 </resources>

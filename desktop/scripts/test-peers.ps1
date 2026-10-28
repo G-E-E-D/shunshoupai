@@ -59,7 +59,7 @@ try {
     $second = Start-PeerServer 43130 $secondDatabase $secondSecret 'second-restarted'
     Wait-PeerServer 43129 $first; Wait-PeerServer 43130 $second
     Run-PeerNative '--peer-resume-smoke' 'restart-and-reconnect' $firstSecret $secondSecret
-    Set-Content -LiteralPath (Join-Path $ReportDirectory 'result.txt') -Encoding utf8 -Value 'PASS: two independent Node calendars; native QR image pairing never switches local API; bidirectional merge; calendar conflict entry and explicit resolution; process restart and peer reconnection; reciprocal unpairing retains local copies.'
+    Set-Content -LiteralPath (Join-Path $ReportDirectory 'result.txt') -Encoding utf8 -Value 'PASS: two independent Go calendars; native QR image pairing never switches local API; bidirectional merge; calendar conflict entry and explicit resolution; process restart and peer reconnection; reciprocal unpairing retains local copies.'
     Write-Host "PASS: native two-device pairing, merge, conflict choice and restart/reconnection. Reports: $ReportDirectory"
 } finally {
     foreach ($process in @($native,$first,$second)) { if ($process -and !$process.HasExited) { Stop-Process -Id $process.Id -ErrorAction SilentlyContinue; $process.WaitForExit(10000) | Out-Null } }

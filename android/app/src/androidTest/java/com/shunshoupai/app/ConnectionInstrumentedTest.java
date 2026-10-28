@@ -14,10 +14,6 @@ import android.os.ParcelFileDescriptor;
 import android.os.SystemClock;
 import android.util.Log;
 import android.view.View;
-import android.webkit.CookieManager;
-import android.webkit.WebSettings;
-import android.webkit.WebStorage;
-import android.webkit.WebView;
 import android.widget.EditText;
 import android.widget.TextView;
 
@@ -67,10 +63,7 @@ public class ConnectionInstrumentedTest {
         context.getSharedPreferences("offline-editor", Context.MODE_PRIVATE).edit().clear().commit();
         context.getSharedPreferences("device-credentials", Context.MODE_PRIVATE).edit().clear().commit();
         context.deleteDatabase("schedule-offline.sqlite");
-        InstrumentationRegistry.getInstrumentation().runOnMainSync(() -> {
-            CookieManager.getInstance().removeAllCookies(null);
-            WebStorage.getInstance().deleteAllData();
-        });
+        for(String name:new String[]{"native-workbench","planning-drafts","local-model-settings-v1"})context.getSharedPreferences(name,Context.MODE_PRIVATE).edit().clear().commit();
     }
 
     @After
@@ -86,8 +79,6 @@ public class ConnectionInstrumentedTest {
         assertTrue(read(a -> a.findViewById(R.id.offline_add).isEnabled()));
         scenario.onActivity(activity -> activity.findViewById(R.id.offline_connect).performClick());
         assertEquals(View.VISIBLE, read(a -> a.findViewById(R.id.setup_screen).getVisibility()).intValue());
-        assertEquals("", read(a -> ((EditText) a.findViewById(R.id.server_url)).getText().toString()));
-        assertEquals(View.GONE,read(a -> a.findViewById(R.id.server_url).getVisibility()).intValue());
 
         String[] invalid = {
                 "javascript:alert(1)", "file:///sdcard/private.txt",
@@ -106,103 +97,20 @@ public class ConnectionInstrumentedTest {
     }
 
     @Test
-    public void loadRealHttpFixtureWithRestrictedWebViewAndRememberConnection() throws IOException {
-        fixture = new HttpFixture();
-        fixture.start();
-        scenario = ActivityScenario.launch(MainActivity.class);
-        connect(fixture.origin());
-        waitUntil("HTTP fixture should actually render", () -> "Fixture ready".equals(webTitle()));
-
-        scenario.onActivity(activity -> {
-            WebView web = activity.findViewById(R.id.web_view);
-            WebSettings settings = web.getSettings();
-            assertTrue(settings.getJavaScriptEnabled());
-            assertTrue(settings.getDomStorageEnabled());
-            assertFalse(settings.getAllowFileAccess());
-            assertFalse(settings.getAllowContentAccess());
-            assertFalse(settings.getJavaScriptCanOpenWindowsAutomatically());
-            assertEquals(WebSettings.MIXED_CONTENT_NEVER_ALLOW, settings.getMixedContentMode());
-            assertTrue(settings.getSafeBrowsingEnabled());
-            assertFalse(CookieManager.getInstance().acceptThirdPartyCookies(web));
-        });
-
-        scenario.recreate();
-        assertEquals(View.VISIBLE, read(a -> a.findViewById(R.id.offline_screen).getVisibility()).intValue());
-        scenario.onActivity(activity -> activity.findViewById(R.id.offline_online).performClick());
-        waitUntil("Saved address must survive Activity recreation", () -> "Fixture ready".equals(webTitle()));
-        assertEquals(View.GONE, read(a -> a.findViewById(R.id.setup_screen).getVisibility()).intValue());
-        Context context = InstrumentationRegistry.getInstrumentation().getTargetContext();
-        String saved = context.getSharedPreferences("connection", Context.MODE_PRIVATE).getString("server_url", "");
-        assertNotNull(saved);
-        assertTrue(saved.startsWith(fixture.origin()));
-    }
-
-    @Test
-    public void connectionFailureKeepsLocalSchedulesAndCanRecover() throws IOException {
-        fixture=new HttpFixture();fixture.start();scenario=ActivityScenario.launch(MainActivity.class);connect(fixture.origin());
-        waitUntil("Paired fixture should render",()->"Fixture ready".equals(webTitle()));fixture.stop();
-        scenario.onActivity(activity->activity.findViewById(R.id.toolbar_refresh).performClick());
-        waitUntil("Offline smart tools should explain the unavailable device",()->read(a->a.findViewById(R.id.setup_screen).getVisibility())==View.VISIBLE);
-        assertFalse(read(a->((TextView)a.findViewById(R.id.connection_error)).getText().toString()).isEmpty());
-        scenario.onActivity(activity->activity.findViewById(R.id.cancel_connection).performClick());
-        assertEquals(View.VISIBLE,read(a->a.findViewById(R.id.offline_screen).getVisibility()).intValue());
-        fixture.start();scenario.onActivity(activity->activity.findViewById(R.id.offline_online).performClick());
-        waitUntil("The saved pair should reconnect without another QR",()->"Fixture ready".equals(webTitle()));
-    }
-
-    @Test
-    public void emptySuccessfulHttpPageCannotMasqueradeAsReadyAndCompatibilityRetryRecovers() throws IOException {
-        fixture = new HttpFixture();
-        fixture.blankPage = true;
-        fixture.start();
-        scenario = ActivityScenario.launch(MainActivity.class);
-        connect(fixture.origin());
-        waitUntil("The intentionally empty document should finish resource loading",
-                () -> "Empty fixture".equals(webTitle())
-                        && read(a -> a.findViewById(R.id.web_screen).getVisibility()) == View.VISIBLE
-                        && read(a -> ((WebView) a.findViewById(R.id.web_view)).getProgress()) == 100);
-        assertEquals("Resource progress 100 must keep the native loading state until visible content is ready",
-                View.VISIBLE, read(a -> a.findViewById(R.id.loading_progress).getVisibility()).intValue());
-        long deadline = SystemClock.elapsedRealtime() + 30_000;
-        while (SystemClock.elapsedRealtime() < deadline
-                && read(a -> a.findViewById(R.id.error_panel).getVisibility()) != View.VISIBLE) SystemClock.sleep(100);
-        assertEquals("An empty HTTP 200 page must become a native recoverable error, never an endless white screen",
-                View.VISIBLE, read(a -> a.findViewById(R.id.error_panel).getVisibility()).intValue());
-        fixture.blankPage = false;
-        scenario.onActivity(activity -> activity.findViewById(R.id.error_retry).performClick());
-        waitUntil("Compatibility retry should display the recovered document",
-                () -> "Fixture ready".equals(webTitle())
-                        && read(a -> a.findViewById(R.id.error_panel).getVisibility()) != View.VISIBLE
-                        && read(a -> a.findViewById(R.id.loading_progress).getVisibility()) != View.VISIBLE);
-        assertEquals(View.LAYER_TYPE_SOFTWARE,
-                read(a -> ((WebView) a.findViewById(R.id.web_view)).getLayerType()).intValue());
-    }
-
-    @Test
-    public void pairedRootOnlyWorkspaceFallsBackWithoutForwardingThePairingToken() throws IOException {
-        fixture=new HttpFixture();fixture.legacyRootOnly=true;fixture.start();scenario=ActivityScenario.launch(MainActivity.class);connect(fixture.origin());
-        waitUntil("A paired root-only workspace should recover once",()->"Fixture ready".equals(webTitle())&&ServerAddress.normalize(fixture.origin()).equals(read(a->((WebView)a.findViewById(R.id.web_view)).getUrl()))&&read(a->a.findViewById(R.id.loading_progress).getVisibility())!=View.VISIBLE);
-        assertEquals("true",evaluate("window.receivedFragment==='' && location.hash==='"+"'"));
+    public void pairedComputerCanBeClosedWithoutBlockingLocalPlanningOrRestoringRemoteUi() throws Exception {
+        fixture=new HttpFixture();fixture.start();scenario=ActivityScenario.launch(MainActivity.class);
+        scanAndAgree(fixture.origin()+"/#pair="+fixture.pairToken);awaitPairedHome(fixture.identity.spaceId);
+        String primary=read(a->((OfflineScheduleView)a.findViewById(R.id.offline_screen)).scope());
+        fixture.stop();scenario.recreate();
+        assertEquals(primary,read(a->((OfflineScheduleView)a.findViewById(R.id.offline_screen)).scope()));
+        scenario.onActivity(activity->activity.findViewById(R.id.offline_online).performClick());
+        waitUntil("Intelligent planning must be native and immediately usable with the computer closed",()->read(activity->{
+            for(View window:android.view.inspector.WindowInspector.getGlobalWindowViews())if(window.findViewById(R.id.planner_input)!=null)return true;
+            return false;
+        }));
+        assertEquals("Pairing must not fetch or restore a remote workspace",0,fixture.mobileRequests.get());
         Context context=InstrumentationRegistry.getInstrumentation().getTargetContext();
         assertFalse(context.getSharedPreferences("connection",Context.MODE_PRIVATE).getAll().toString().contains(fixture.pairToken));
-    }
-
-    @Test
-    public void liveBackendUsesPairedDeviceSessionInsideAndroidWebView() throws Exception {
-        String root=backendRoot();PairingGrant grant=pairingGrant(root,true);
-        scenario=ActivityScenario.launch(MainActivity.class);scanAndAgree(root+"#pair="+grant.token);
-        awaitPairedHome(grant.space);scenario.onActivity(activity->activity.findViewById(R.id.offline_online).performClick());
-        waitForDevice(grant.space);
-        assertEquals("true",evaluate("!document.body.innerText.includes('注册账号') && !document.querySelector('input[type=password]')"));
-        String requestId=JSONObject.quote(UUID.randomUUID().toString());
-        evaluate("(async()=>{window.__deviceIntegration={done:false};try{const request=async(path,body)=>{const r=await fetch(path,{method:body?'POST':'GET',headers:{'Content-Type':'application/json'},...(body?{body:JSON.stringify(body)}:{})});const data=await r.json();if(!r.ok)throw Error(path+':'+r.status);return data};const parsed=await request('/api/ai/parse',{text:'明天下午三点到四点安卓面试，今天晚上七点到八点改简历，八点到九点准备面试。',timezone:'Asia/Shanghai'});if(parsed.events.length!==3||parsed.needs_clarification)throw Error('Expected three drafts');const saved=await request('/api/events/commit',{request_id:"+requestId+",events:parsed.events});window.__deviceIntegration={done:true,created:saved.events.length};}catch(error){window.__deviceIntegration={done:true,error:String(error)}}})()");
-        waitUntil("Paired HttpOnly session should support parse and commit",()->"true".equals(evaluate("window.__deviceIntegration?.done===true")));
-        JSONObject result=new JSONObject((String)new JSONTokener(evaluate("JSON.stringify(window.__deviceIntegration)")).nextValue());
-        assertFalse(result.toString(),result.has("error"));assertEquals(3,result.getInt("created"));
-        assertEquals("true",evaluate("!document.cookie.includes('shunshoupai_device')"));
-        scenario.onActivity(activity->activity.findViewById(R.id.toolbar_refresh).performClick());waitForDevice(grant.space);
-        waitUntil("Reload should retain paired access and show saved events",()->"true".equals(evaluate("Array.from(document.querySelectorAll('.event-main h3')).some(el=>el.textContent==='改简历')")));
-        captureWorkspaceScreenshot();
     }
 
     @Test
@@ -217,7 +125,7 @@ public class ConnectionInstrumentedTest {
     }
 
     @Test
-    public void scannedAddressRequiresExplicitPairingAndBlankWebPageCannotBlockPairing() throws IOException {
+    public void scannedAddressRequiresExplicitPairingAndNeverOpensRemoteUi() throws IOException {
         fixture=new HttpFixture();fixture.blankPage=true;fixture.start();scenario=ActivityScenario.launch(MainActivity.class);
         scenario.onActivity(activity->activity.findViewById(R.id.offline_connect).performClick());
         scenario.onActivity(activity->activity.handleScanResult(fixture.origin()));
@@ -272,7 +180,7 @@ public class ConnectionInstrumentedTest {
                 ServerAddress.normalize(invalid);
                 fail("Java validation must reject unsafe or ambiguous addresses");
             } catch (IllegalArgumentException expected) {
-                // Java validation refuses these before WebView loads.
+                // Java validation refuses these before any connection.
             }
         }
     }
@@ -324,7 +232,6 @@ public class ConnectionInstrumentedTest {
     }
 
     private String backendRoot(){String root=InstrumentationRegistry.getArguments().getString("backend_url","");String key=InstrumentationRegistry.getArguments().getString("bootstrap_key","");Assume.assumeFalse("Live device tests need an isolated backend and injected test bootstrap key",root.isEmpty()||key.isEmpty());return ServerAddress.normalize(root);}
-    private void waitForDevice(String space){waitUntil("WebView should restore the paired device through HttpOnly cookies",()->"true".equals(evaluate("(function(){if(!window.__checkingDevice){window.__checkingDevice=true;fetch('/api/devices/info').then(r=>r.json()).then(s=>{window.__deviceSpace=s.space_id;window.__checkingDevice=false}).catch(()=>window.__checkingDevice=false)}return document.documentElement.getAttribute('data-shunshoupai-ready')==='true'&&window.__deviceSpace==="+JSONObject.quote(space)+"})()")));}
     private void awaitPairedHome(String remoteSpace){waitUntil("QR pairing should preserve the local primary calendar and register a separate peer",()->read(activity->{try(LocalScheduleStore local=new LocalScheduleStore(activity)){return ((OfflineScheduleView)activity.findViewById(R.id.offline_screen)).scope().equals(local.primaryScope())&&activity.findViewById(R.id.offline_screen).getVisibility()==View.VISIBLE&&local.peers().stream().anyMatch(peer->remoteSpace.equals(peer.optString("space_id"))&&peer.optBoolean("enabled"));}catch(Exception error){return false;}}));}
     private JSONObject replicaRequest(String root,String cookie,String device,org.json.JSONArray records,String after)throws Exception{
         JSONObject body=new JSONObject().put("device_id",device).put("records",records);if(after!=null)body.put("after",after);
@@ -363,7 +270,6 @@ public class ConnectionInstrumentedTest {
         }
         JSONObject issued=apiRequest(root,"api/pairing/issue","POST",owner.cookie,new JSONObject(),null).body;return new PairingGrant(space,issued.getString("token"),owner.cookie,device);
     }
-    private void connect(String origin){scanAndAgree(ServerAddress.normalize(origin)+"#pair="+fixture.pairToken);awaitPairedHome(fixture.identity.spaceId);scenario.onActivity(activity->activity.findViewById(R.id.offline_online).performClick());}
     private void scanAndAgree(String link) {
         scenario.onActivity(activity->{try {
             java.lang.reflect.Field hostField=MainActivity.class.getDeclaredField("deviceHost"),syncField=MainActivity.class.getDeclaredField("scheduleSync");hostField.setAccessible(true);syncField.setAccessible(true);
@@ -384,41 +290,6 @@ public class ConnectionInstrumentedTest {
             return false;
         });
     }
-    private String webTitle() {
-        return read(a -> {
-            WebView web = a.findViewById(R.id.web_view);
-            return web == null ? null : web.getTitle();
-        });
-    }
-
-    private String evaluate(String script) {
-        AtomicReference<String> result = new AtomicReference<>();
-        CountDownLatch completed = new CountDownLatch(1);
-        scenario.onActivity(activity -> {
-            WebView web = activity.findViewById(R.id.web_view);
-            if (web == null) {
-                result.set("null");
-                completed.countDown();
-                return;
-            }
-            web.evaluateJavascript(script, value -> {
-                result.set(value);
-                completed.countDown();
-            });
-        });
-        try {
-            assertTrue("WebView JavaScript callback timed out", completed.await(5, TimeUnit.SECONDS));
-        } catch (InterruptedException interrupted) {
-            Thread.currentThread().interrupt();
-            throw new AssertionError("Interrupted while waiting for WebView", interrupted);
-        }
-        return result.get();
-    }
-
-    private void captureWorkspaceScreenshot() {
-        captureScreenshot("android-workspace.png");
-    }
-
     private void captureScreenshot(String filename) {
         Bitmap screenshot = InstrumentationRegistry.getInstrumentation().getUiAutomation().takeScreenshot();
         if (screenshot == null) return;

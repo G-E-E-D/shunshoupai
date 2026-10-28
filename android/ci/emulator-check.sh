@@ -100,7 +100,7 @@ adb forward tcp:43128 tcp:43127
 # is best-effort and cannot turn failed business assertions into a success.
 adb pull /sdcard/Android/data/com.shunshoupai.app/files/android-workspace.png \
   "$report_dir/workspace.png" || true
-for capture in android-offline-home android-offline-editor android-offline-conflict android-devices android-peer-home android-peer-conflict; do
+for capture in android-offline-home android-offline-editor android-offline-conflict android-devices android-peer-home android-peer-conflict android-standalone-review android-standalone-week android-standalone-month android-standalone-model; do
   adb pull "/sdcard/Android/data/com.shunshoupai.app/files/$capture.png" \
     "$report_dir/$capture.png" || true
 done
