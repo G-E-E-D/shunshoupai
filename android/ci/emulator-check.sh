@@ -112,3 +112,8 @@ for capture in android-ocr-selection android-ocr-review android-ocr-drafts; do
   adb pull "/data/local/tmp/shunshoupai-ocr/$capture.png" \
     "$report_dir/$capture.png" || true
 done
+
+# The normal instrumentation process cannot prove that its own process was
+# killed. A separate shell acceptance run verifies cold alarms, Doze and reboot.
+adb pull /data/local/tmp/shunshoupai-background/android-background-settings.png "$report_dir/android-background-settings.png"
+bash ci/background-check.sh

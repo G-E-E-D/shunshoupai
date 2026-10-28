@@ -19,7 +19,7 @@ import java.util.UUID;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.atomic.AtomicLong;
 
-/** Foreground-only behavior is checked against a fixed phone clock, with no server. */
+/** Reminder selection and durable receipts use a fixed clock, independent of activity state. */
 @RunWith(AndroidJUnit4.class)
 public class ReminderSchedulerInstrumentedTest {
     private Context context;private LocalScheduleStore store;private ReminderScheduler reminder;private String database;
@@ -32,7 +32,7 @@ public class ReminderSchedulerInstrumentedTest {
             @Override public Context getApplicationContext(){return this;}
         };
         database=prefix+"events.sqlite";store=new LocalScheduleStore(context,database);store.initialize("");
-        reminder=new ReminderScheduler(context,store,notices::add,now::get);
+        reminder=new ReminderScheduler(context,store,notices::add,now::get);reminder.setEnabled(false);
     }
     @After public void close(){if(reminder!=null)main(reminder::close);store.close();context.deleteDatabase(database);}
     private void main(Runnable action){InstrumentationRegistry.getInstrumentation().runOnMainSync(action);InstrumentationRegistry.getInstrumentation().waitForIdleSync();}
@@ -40,7 +40,7 @@ public class ReminderSchedulerInstrumentedTest {
         LocalDateTime start=LocalDateTime.of(2036,2,1,10,minute);
         return store.save(store.primaryScope(),null,LocalScheduleStore.payload(title,start,start.plusMinutes(20),status,deleted));
     }
-    @Test public void optInForegroundWindowIgnoresCompletedDeletedAndConflictedEvents()throws Exception {
+    @Test public void backgroundWindowIgnoresCompletedDeletedAndConflictedEvents()throws Exception {
         save("该提醒的本机安排",0,"planned",false);save("已完成不提醒",0,"completed",false);save("删除不提醒",0,"planned",true);save("六分钟之外",6,"planned",false);
         String conflict=save("冲突初稿",0,"planned",false);JSONObject record=null;
         JSONArray records=store.replica().page(null).getJSONArray("records");for(int i=0;i<records.length();i++)if(conflict.equals(records.getJSONObject(i).getString("id")))record=records.getJSONObject(i);
@@ -51,12 +51,12 @@ public class ReminderSchedulerInstrumentedTest {
         assertFalse(reminder.isEnabled());main(()->{reminder.onForeground(true);reminder.refresh();});assertTrue(notices.isEmpty());
         main(()->{reminder.setEnabled(true);reminder.refresh();});assertEquals(1,notices.size());assertTrue(notices.get(0).contains("该提醒的本机安排"));
         main(reminder::refresh);assertEquals("Repeated refresh cannot repeat the same reminder",1,notices.size());
-        main(()->reminder.onForeground(false));now.addAndGet(6*60*1000);main(reminder::refresh);assertEquals(1,notices.size());
+        main(()->reminder.onForeground(false));now.addAndGet(6*60*1000);main(reminder::refresh);assertEquals(2,notices.size());
         main(()->{reminder.onForeground(true);reminder.refresh();});assertEquals(2,notices.size());assertTrue(notices.get(1).contains("六分钟之外"));
         assertTrue(store.peers().isEmpty());
     }
     @Test public void enabledPreferenceSurvivesRestartAndCompletedEventDoesNotReturnAsReminder()throws Exception {
-        String id=save("持久开关",0,"planned",false);main(()->reminder.setEnabled(true));main(reminder::close);
+        String id=save("持久开关",0,"planned",false);main(()->reminder.setEnabled(true));notices.clear();main(reminder::close);
         reminder=new ReminderScheduler(context,store,notices::add,now::get);assertTrue(reminder.isEnabled());
         JSONObject row=store.list(store.primaryScope()).stream().filter(value->id.equals(value.optString("id"))).findFirst().get();
         store.save(store.primaryScope(),id,LocalScheduleStore.desired(row).put("status","completed"),row.getInt("base_version"));

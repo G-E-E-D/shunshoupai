@@ -107,6 +107,11 @@ jobs:
           "$ANDROID_HOME/build-tools/35.0.0/zipalign" -c -P 16 -v 4 "release/$RELEASE_APK_NAME" > release/zip-alignment.txt
           python3 ci/check-native-alignment.py "release/$RELEASE_APK_NAME" | tee release/native-alignment.txt
           "$ANDROID_HOME/build-tools/35.0.0/aapt" dump badging "release/$RELEASE_APK_NAME" > release/apk-metadata.txt
+          "$ANDROID_HOME/build-tools/35.0.0/aapt" dump xmltree "release/$RELEASE_APK_NAME" AndroidManifest.xml > release/manifest-metadata.txt
+          if grep -Eq 'BackgroundFixtureActivity|CaptureFixtureActivity' release/manifest-metadata.txt; then
+            echo 'Debug-only test activities must not be shipped in the release APK.' >&2
+            exit 1
+          fi
           python3 - <<'PY'
           import json, shlex
           from pathlib import Path
@@ -215,7 +220,7 @@ jobs:
           sudo udevadm control --reload-rules
           sudo udevadm trigger --name-match=kvm
           chmod +x gradlew
-      - name: Install and launch signed APK, then run Android UI instrumentation
+      - name: Verify signed APK, UI instrumentation, cold Doze alarms and reboot recovery
         uses: reactivecircus/android-emulator-runner@4c44018e59b437e86cdfc41da381398f93ed8808 # v2
         env:
           HAS_SIGNED_RELEASE: ${{ needs.build.outputs.signed }}

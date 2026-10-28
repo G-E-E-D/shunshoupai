@@ -27,8 +27,8 @@ public class OfflineScheduleInstrumentedTest {
     private LocalScheduleStore store;
     private Context context;
     @Before public void open(){context=ApplicationProvider.getApplicationContext();context.getSharedPreferences("connection",Context.MODE_PRIVATE).edit().clear().commit();context.getSharedPreferences("offline-editor",Context.MODE_PRIVATE).edit().clear().commit();
-        context.getSharedPreferences("native-workbench",Context.MODE_PRIVATE).edit().clear().commit();context.deleteDatabase("schedule-offline.sqlite");store=new LocalScheduleStore(context);}
-    @After public void close(){store.close();context.deleteDatabase("schedule-offline.sqlite");}
+        context.getSharedPreferences("native-workbench",Context.MODE_PRIVATE).edit().clear().commit();BackgroundTestState.reset();context.deleteDatabase("schedule-offline.sqlite");store=new LocalScheduleStore(context);}
+    @After public void close(){store.close();BackgroundTestState.reset();context.deleteDatabase("schedule-offline.sqlite");}
     private JSONObject payload(String title)throws Exception{return LocalScheduleStore.payload(title,LocalDateTime.of(2026,10,27,10,0),LocalDateTime.of(2026,10,27,11,0),"planned",false);}
     private JSONObject remote(String id,String title,int version,boolean deleted)throws Exception{return new JSONObject().put("id",id).put("title",title).put("start_at","2026-10-27T02:00:00.000Z").put("end_at","2026-10-27T03:00:00.000Z").put("status","planned").put("version",version).put("deleted_at",deleted?"2026-10-27T04:00:00.000Z":JSONObject.NULL);}
     private JSONObject response(JSONObject mutation,JSONObject event,String status)throws Exception{return new JSONObject().put("results",new JSONArray().put(new JSONObject().put("mutation_id",mutation.getString("mutation_id")).put("status",status).put("event",event))).put("events",new JSONArray().put(event));}
@@ -118,7 +118,7 @@ public class OfflineScheduleInstrumentedTest {
     }
 
     private void createLegacyDatabase(){
-        store.close();context.deleteDatabase("schedule-offline.sqlite");
+        store.close();BackgroundTestState.reset();context.deleteDatabase("schedule-offline.sqlite");
         try(android.database.sqlite.SQLiteDatabase legacy=context.openOrCreateDatabase("schedule-offline.sqlite",Context.MODE_PRIVATE,null)){
             legacy.execSQL("CREATE TABLE local_events(scope TEXT NOT NULL,id TEXT NOT NULL,payload TEXT NOT NULL,version INTEGER NOT NULL DEFAULT 0,dirty INTEGER NOT NULL DEFAULT 1,conflict TEXT,message TEXT,expected_base INTEGER,PRIMARY KEY(scope,id))");
             legacy.execSQL("CREATE TABLE outbox(scope TEXT NOT NULL,id TEXT NOT NULL,mutation TEXT NOT NULL,desired TEXT NOT NULL,PRIMARY KEY(scope,id))");

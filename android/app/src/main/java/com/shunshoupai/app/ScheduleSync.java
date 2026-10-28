@@ -21,7 +21,7 @@ final class ScheduleSync {
     private final ExecutorService worker=Executors.newSingleThreadExecutor();
     private final Handler handler;private final LocalScheduleStore store;private final DeviceCredentials credentials;private final DeviceHostRuntime host;private final Listener listener;private final PeerHttp http=new PeerHttp();
     private final Object lifecycle=new Object();private final Map<String,String> statuses=new ConcurrentHashMap<>();
-    private Supplier<String> returnOrigin;private boolean busy;private volatile boolean closed;private volatile long generation;
+    private Supplier<String> returnOrigin;private boolean busy;private int connectedLast;private volatile boolean closed;private volatile long generation;
 
     ScheduleSync(Context context,LocalScheduleStore store,Handler handler,DeviceHostRuntime host,Listener listener){
         this.store=store;this.handler=handler;this.host=host;this.listener=listener;credentials=new DeviceCredentials(context,store.deviceId());
@@ -31,6 +31,8 @@ final class ScheduleSync {
     // It never bypasses private-address checks, peer identity, or credential validation.
     void setReturnOrigin(Supplier<String> provider){returnOrigin=provider;}
     String status(String peerId){return statuses.getOrDefault(peerId,"设备可达时自动同步");}
+    boolean isBusy(){return busy;}
+    boolean connectedLast(){return connectedLast>0;}
 
     void sync(){
         if(busy||closed||!host.isRunning())return;final List<JSONObject> peers;try{peers=store.peers();}catch(Exception error){return;}
@@ -45,7 +47,8 @@ final class ScheduleSync {
                 }
             }
             final String message=needsPairing?"设备配对已失效，请重新扫码；本机日程继续保留":connected>0?("已与 "+connected+" 台设备合并"+(unavailable>0?"，其余设备可达后继续":"")):unavailable>0?"本机日程已保存，对方可达后自动合并":"日程保存在本机，随时可以继续安排";final boolean pairing=needsPairing;
-            handler.post(()->{if(!cancelled(expected)){busy=false;listener.result("",store.primaryScope(),message,pairing);}});
+            final int successful=connected;
+            handler.post(()->{if(!cancelled(expected)){connectedLast=successful;busy=false;listener.result("",store.primaryScope(),message,pairing);}});
         });
     }
     private void syncPeer(JSONObject peer,String token,long expected)throws Exception{

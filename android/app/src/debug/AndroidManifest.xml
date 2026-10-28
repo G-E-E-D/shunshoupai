@@ -1,5 +1,6 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
     <application>
         <activity android:name=".CaptureFixtureActivity" android:exported="false" />
+        <activity android:name=".BackgroundFixtureActivity" android:exported="true" />
     </application>
 </manifest>

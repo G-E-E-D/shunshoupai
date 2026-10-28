@@ -1,4 +1,4 @@
-# Windows 原生桌面端（v2.1.0）
+# Windows 原生桌面端（v2.2.0）
 
 Windows 保留 C++17 / Qt 6 Widgets 和 Qt Network 主体，不嵌入浏览器；本轮新增截图、悬浮入口、OCR 和文字确认由 Java 模块提供。安装后打开即可使用本机日程，无需注册、登录或维护账号会话。
 

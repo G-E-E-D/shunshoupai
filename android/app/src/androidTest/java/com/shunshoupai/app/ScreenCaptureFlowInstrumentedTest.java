@@ -40,7 +40,7 @@ public class ScreenCaptureFlowInstrumentedTest {
     private boolean otherAppStarted;
     @Before public void prepare()throws Exception{
         android.accessibilityservice.AccessibilityServiceInfo accessibility=InstrumentationRegistry.getInstrumentation().getUiAutomation().getServiceInfo();accessibility.flags|=android.accessibilityservice.AccessibilityServiceInfo.FLAG_REPORT_VIEW_IDS;InstrumentationRegistry.getInstrumentation().getUiAutomation().setServiceInfo(accessibility);
-        context=ApplicationProvider.getApplicationContext();ScreenCaptureService.stop(context);SystemClock.sleep(200);CaptureGrantGate.stop();context.deleteDatabase("schedule-offline.sqlite");
+        context=ApplicationProvider.getApplicationContext();ScreenCaptureService.stop(context);waitFor("previous capture fully stopped",()->!ScreenCaptureService.isRunning(),5000);CaptureGrantGate.stop();BackgroundTestState.reset();context.deleteDatabase("schedule-offline.sqlite");
         for(String name:new String[]{"connection","offline-editor","native-workbench","planning-drafts","local-model-settings-v1","ocr-text-inbox-v1"})context.getSharedPreferences(name,Context.MODE_PRIVATE).edit().clear().commit();
         shell("appops set "+context.getPackageName()+" SYSTEM_ALERT_WINDOW allow");if(Build.VERSION.SDK_INT>=33)shell("pm grant "+context.getPackageName()+" android.permission.POST_NOTIFICATIONS");
         main=ActivityScenario.launch(MainActivity.class);
@@ -96,7 +96,7 @@ public class ScreenCaptureFlowInstrumentedTest {
         }
         waitFor("System consent button",()->findSystemId("android:id/button1")!=null,5000);SystemClock.sleep(200);tap(findSystemId("android:id/button1"));
     }
-    private boolean chooseSyntheticApp(){AccessibilityNodeInfo root=InstrumentationRegistry.getInstrumentation().getUiAutomation().getRootInActiveWindow();if(root==null||!"com.android.systemui".contentEquals(root.getPackageName()))return false;for(AccessibilityNodeInfo label:root.findAccessibilityNodeInfosByText("OCR Test Screen")){if(!label.isVisibleToUser()||!"OCR Test Screen".contentEquals(label.getText()))continue;AccessibilityNodeInfo target=label;while(target!=null&&!target.isClickable())target=target.getParent();if(target!=null&&target.isEnabled()){tap(target);return true;}}return false;}
+    private boolean chooseSyntheticApp(){AccessibilityNodeInfo root=InstrumentationRegistry.getInstrumentation().getUiAutomation().getRootInActiveWindow();if(root==null||!"com.android.systemui".contentEquals(root.getPackageName()))return false;for(AccessibilityNodeInfo label:root.findAccessibilityNodeInfosByText("OCR Test Screen")){if(!label.isVisibleToUser()||!"OCR Test Screen".contentEquals(label.getText()))continue;AccessibilityNodeInfo target=label;while(target!=null&&!target.isClickable())target=target.getParent();if(target!=null&&target.isEnabled()){if(target.performAction(AccessibilityNodeInfo.ACTION_CLICK))return true;tap(target);return true;}}return false;}
     private void showFixture(){fixture=ActivityScenario.launch(new Intent(context,CaptureFixtureActivity.class));waitFor("floating button outside the workbench",()->has(R.id.capture_bubble),7000);SystemClock.sleep(400); }
     private void selectTextRegion(){
         waitFor("floating capture action",()->has(R.id.capture_bubble),7000);click(R.id.capture_bubble);waitFor("frozen selection surface",()->{AtomicReference<Boolean> laidOut=new AtomicReference<>(false);onMain(()->{View view=find(R.id.capture_selection);laidOut.set(view!=null&&view.getWidth()>100&&view.getHeight()>100);});return laidOut.get();},7000);
@@ -150,11 +150,28 @@ public class ScreenCaptureFlowInstrumentedTest {
         shell("am start -W -n com.shunshoupai.app.test/com.shunshoupai.app.CaptureOtherAppActivity");
         otherAppStarted=true;
         waitFor("other synthetic app is visible",()->screenText().contains("OCR Test Screen"),7000);
-        onMain(()->context.startActivity(new Intent(originalMainIntent).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK|Intent.FLAG_ACTIVITY_REORDER_TO_FRONT)));
-        waitFor("native workbench resumes",()->screenText().contains("顺手排"),7000);click(R.id.offline_capture);waitFor("feature explanation",()->clickText("开启悬浮取字"),5000);
+        // ActivityScenario's original intent contains CLEAR_TASK. Do not reuse it
+        // when returning from the other app: that destroys the calendar under test.
+        onMain(()->context.startActivity(new Intent(context,MainActivity.class).setAction(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LAUNCHER).setFlags(Intent.FLAG_ACTIVITY_NEW_TASK|Intent.FLAG_ACTIVITY_REORDER_TO_FRONT)));
+        AtomicReference<MainActivity> resumed=new AtomicReference<>();
+        waitFor("native workbench actually resumes",()->{onMain(()->{
+            for(android.app.Activity activity:androidx.test.runner.lifecycle.ActivityLifecycleMonitorRegistry.getInstance().getActivitiesInStage(androidx.test.runner.lifecycle.Stage.RESUMED))
+                if(activity instanceof MainActivity&&activity.getWindow().getDecorView().hasWindowFocus())resumed.set((MainActivity)activity);
+        });return resumed.get()!=null;},7000);
+        onMain(()->resumed.get().findViewById(R.id.offline_capture).performClick());waitFor("feature explanation",()->clickText("开启悬浮取字"),5000);
         acceptSystemMode(true);
         waitFor("System app picker must explicitly select the synthetic app",this::chooseSyntheticApp,10000);
-        waitFor("Single-app grant becomes active",ScreenCaptureService::isRunning,15000);
+        try{waitFor("Single-app grant becomes active",()->{
+            if(ScreenCaptureService.isRunning())return true;
+            // The picker can expose its task label before its opening animation
+            // accepts the tap. Retry only that visible synthetic task, never the grant itself.
+            chooseSyntheticApp();return false;
+        },15000);}catch(AssertionError failure){
+            Bitmap picture=InstrumentationRegistry.getInstrumentation().getUiAutomation().takeScreenshot();
+            if(picture!=null){try(FileOutputStream out=new FileOutputStream(new File(context.getExternalFilesDir(null),"picker-failure.png"))){picture.compress(Bitmap.CompressFormat.PNG,100,out);}finally{picture.recycle();}}
+            android.util.Log.e("PickerTest",screenText());
+            shell("cp /sdcard/Android/data/com.shunshoupai.app/files/picker-failure.png /data/local/tmp/picker-failure.png");throw failure;
+        }
         assertTrue("Single-app consent should complete: "+screenText(),ScreenCaptureService.isRunning());
         waitFor("authorized app returns with the capture control",()->has(R.id.capture_bubble)&&screenText().contains("OCR Test Screen"),8000);
         selectTextRegion();onMain(()->{Bitmap image=(Bitmap)serviceField("snapshot");assertNotNull(image);assertTrue("Shared content remains within the image memory bound",(long)image.getWidth()*image.getHeight()<=3_000_000);});

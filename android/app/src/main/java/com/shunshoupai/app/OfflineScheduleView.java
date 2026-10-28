@@ -41,6 +41,7 @@ final class OfflineScheduleView extends LinearLayout {
     private final SharedPreferences drafts;
     private final Button addButton;
     private final Button modelButton,reminderButton,captureButton;
+    private final Button backgroundHint;
     private final Button dayTab,weekTab,completedTab;
     private final LinearLayout dateRow;
     private final SharedPreferences uiState;
@@ -64,6 +65,7 @@ final class OfflineScheduleView extends LinearLayout {
         reminderButton=button("提醒",()->{});reminderButton.setId(R.id.offline_reminders);reminderButton.setContentDescription("本机提醒设置");heading.addView(reminderButton);addView(heading);
         identity=text("本机日程 · 打开就能用",12,false);addView(identity);
         status=text("日程保存在本机，已配对设备可达后自动合并",12,false);status.setAccessibilityLiveRegion(View.ACCESSIBILITY_LIVE_REGION_POLITE);addView(status);
+        backgroundHint=button("",()->{});backgroundHint.setId(R.id.background_setup);backgroundHint.setVisibility(GONE);addView(backgroundHint);
         LinearLayout actions=row();
         addButton=button("＋ 新日程",()->edit(null));addButton.setId(R.id.offline_add);actions.addView(addButton,weighted());
         addButton.setBackgroundResource(R.drawable.button_background);addButton.setTextColor(Color.WHITE);
@@ -84,7 +86,8 @@ final class OfflineScheduleView extends LinearLayout {
     void setCaptureAction(Runnable action){captureButton.setOnClickListener(v->action.run());}
     void setCaptureActive(boolean active){captureButton.setText(active?"取字中":"取字");captureButton.setContentDescription(active?"屏幕取字已开启，点此停止":"开启悬浮屏幕取字");}
     void setModelAction(Runnable action){modelButton.setOnClickListener(v->action.run());}
-    void setReminderEnabled(boolean enabled){reminderButton.setText(enabled?"提醒开":"提醒");reminderButton.setContentDescription(enabled?"本机前台提醒已开启":"本机前台提醒已关闭");}
+    void setReminderEnabled(boolean enabled){reminderButton.setText(enabled?"提醒开":"提醒");reminderButton.setContentDescription(enabled?"后台与锁屏日程提醒已开启":"本机提醒设置");}
+    void setBackgroundHint(String hint,Runnable action){backgroundHint.setText(hint);backgroundHint.setVisibility(hint.isEmpty()?GONE:VISIBLE);backgroundHint.setOnClickListener(view->action.run());}
     void setReminderAction(Runnable action){reminderButton.setOnClickListener(v->action.run());}
     LocalDate selectedDate(){return selected;}
     void showDate(LocalDate value){selected=value;uiState.edit().putString("date",selected.toString()).apply();refresh();}

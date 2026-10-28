@@ -62,7 +62,7 @@ public class ConnectionInstrumentedTest {
         context.getSharedPreferences("connection", Context.MODE_PRIVATE).edit().clear().commit();
         context.getSharedPreferences("offline-editor", Context.MODE_PRIVATE).edit().clear().commit();
         context.getSharedPreferences("device-credentials", Context.MODE_PRIVATE).edit().clear().commit();
-        context.deleteDatabase("schedule-offline.sqlite");
+        BackgroundTestState.reset();context.deleteDatabase("schedule-offline.sqlite");
         for(String name:new String[]{"native-workbench","planning-drafts","local-model-settings-v1"})context.getSharedPreferences(name,Context.MODE_PRIVATE).edit().clear().commit();
     }
 

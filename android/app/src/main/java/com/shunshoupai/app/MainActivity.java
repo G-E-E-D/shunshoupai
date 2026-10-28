@@ -33,6 +33,7 @@ import com.journeyapps.barcodescanner.ScanOptions;
 
 /** Every daily workflow is native and local. Pairing is only used to replicate schedules. */
 public final class MainActivity extends ComponentActivity {
+    static final String ACTION_BACKGROUND_SETTINGS="com.shunshoupai.app.BACKGROUND_SETTINGS", ACTION_REMINDER="com.shunshoupai.app.OPEN_REMINDER";
     private static final String PREFS="connection", SERVER_KEY="server_url";
     private final Handler handler=new Handler(Looper.getMainLooper());
     private SharedPreferences preferences;
@@ -46,6 +47,9 @@ public final class MainActivity extends ComponentActivity {
     private DevicePairingDialog pairingDialog;
     private LocalPlanningEngine planningEngine;
     private ReminderScheduler reminders;
+    private CalendarRuntime runtime;
+    private BackgroundSettings backgroundSettings;
+    private final Runnable runtimeChanged=()->{if(isDestroyed()||offlineScreen==null)return;offlineScreen.setStatus(runtime.status());refreshBackgroundUi();if(setupScreen.getVisibility()==View.VISIBLE)renderPeers();};
     private NativePlanningDialog planningDialog;
     private NativeModelSettingsDialog modelDialog;
     private boolean foreground,changingServer,enablingCapture,notificationAsked;
@@ -64,12 +68,12 @@ public final class MainActivity extends ComponentActivity {
     @Override protected void onCreate(Bundle state){
         super.onCreate(state);if(state!=null){enablingCapture=state.getBoolean("capture_enabling");notificationAsked=state.getBoolean("capture_notified");}setContentView(R.layout.activity_main);applyWindowInsets();
         preferences=getSharedPreferences(PREFS,MODE_PRIVATE);setupScreen=findViewById(R.id.setup_screen);connectionError=findViewById(R.id.connection_error);connectButton=findViewById(R.id.connect_button);
-        scheduleStore=new LocalScheduleStore(this);scheduleStore.initialize(preferences.getString(SERVER_KEY,""));planningEngine=new LocalPlanningEngine(this);
-        deviceHost=new DeviceHostRuntime(this,scheduleStore,handler,()->{if(isFinishing()||isDestroyed()||offlineScreen==null)return;offlineScreen.refresh();if(reminders!=null)reminders.refresh();if(setupScreen.getVisibility()==View.VISIBLE)renderPeers();});
-        scheduleSync=new ScheduleSync(this,scheduleStore,handler,deviceHost,(origin,scope,message,required)->{if(changingServer||isDestroyed())return;offlineScreen.setStatus(message);if(reminders!=null)reminders.refresh();if(setupScreen.getVisibility()==View.VISIBLE)renderPeers();});
+        runtime=CalendarRuntime.get(this);scheduleStore=runtime.store;deviceHost=runtime.host;scheduleSync=runtime.sync;reminders=runtime.reminders;
+        planningEngine=new LocalPlanningEngine(this);runtime.listen(runtimeChanged);
+        backgroundSettings=new BackgroundSettings(this,runtime,this::refreshBackgroundUi);
         offlineScreen=new OfflineScheduleView(this,scheduleStore,this::showConnectionSettings,this::showPlanning,this::syncSchedules);
         offlineScreen.setModelAction(this::showModelSettings);offlineScreen.setCaptureAction(this::showCaptureSettings);
-        reminders=new ReminderScheduler(this,scheduleStore,message->{Toast.makeText(this,message,Toast.LENGTH_LONG).show();offlineScreen.setStatus(message);});
+
         offlineScreen.setReminderAction(this::showReminderSettings);offlineScreen.setReminderEnabled(reminders.isEnabled());
         offlineScreen.setId(R.id.offline_screen);offlineScreen.setScope(scheduleStore.activeScope());
         ((FrameLayout)findViewById(R.id.root)).addView(offlineScreen,new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT,ViewGroup.LayoutParams.MATCH_PARENT));
@@ -79,9 +83,9 @@ public final class MainActivity extends ComponentActivity {
         getOnBackPressedDispatcher().addCallback(this,new OnBackPressedCallback(true){@Override public void handleOnBackPressed(){if(changingServer)cancelPairing();if(offlineScreen.getVisibility()==View.VISIBLE)finish();else showOfflineScreen();}});
         showOfflineScreen();
         if(state!=null){offlineScreen.restoreEditor(state.getString("offline_edit_id"));String panel=state.getString("local_panel","");if("planning".equals(panel))showPlanning();else if("model".equals(panel))showModelSettings();}
-        handleOcrIntent(getIntent());
+        handleOcrIntent(getIntent());handleCalendarIntent(getIntent());
     }
-    private void syncSchedules(){if(reminders!=null)reminders.refresh();if(scheduleSync==null||changingServer||!foreground)return;scheduleSync.sync();}
+    private void syncSchedules(){if(runtime!=null&&!changingServer){runtime.localChanged();refreshBackgroundUi();}}
     private void showOfflineScreen(){hideKeyboard();setupScreen.setVisibility(View.GONE);offlineScreen.setVisibility(View.VISIBLE);offlineScreen.refresh();syncSchedules();}
     private void showPlanning(){
         if(!scheduleStore.isPrimary(offlineScreen.scope())){Toast.makeText(this,"请回到主日程后整理，旧资料继续独立保留。",Toast.LENGTH_LONG).show();return;}
@@ -107,7 +111,7 @@ public final class MainActivity extends ComponentActivity {
         launchCaptureConsent();
     }
     private void launchCaptureConsent(){if(!enablingCapture)return;if(!Settings.canDrawOverlays(this)){enablingCapture=false;return;}try{captureConsent.launch(new Intent(this,ScreenCapturePermissionActivity.class).putExtra(ScreenCapturePermissionActivity.EXTRA_SCOPE,scheduleStore.primaryScope()));}catch(RuntimeException unavailable){enablingCapture=false;Toast.makeText(this,"暂时无法请求系统屏幕授权。",Toast.LENGTH_LONG).show();}}
-    @Override protected void onNewIntent(Intent intent){super.onNewIntent(intent);setIntent(intent);handleOcrIntent(intent);}
+    @Override protected void onNewIntent(Intent intent){super.onNewIntent(intent);setIntent(intent);handleOcrIntent(intent);handleCalendarIntent(intent);}
     private void handleOcrIntent(Intent intent){
         if(intent==null||!ScreenCaptureService.ACTION_REVIEW.equals(intent.getAction()))return;
         String id=intent.getStringExtra(ScreenCaptureService.EXTRA_OCR_ID);intent.removeExtra(ScreenCaptureService.EXTRA_OCR_ID);intent.setAction(Intent.ACTION_MAIN);
@@ -115,12 +119,22 @@ public final class MainActivity extends ComponentActivity {
             offlineScreen.destroy();if(modelDialog!=null)modelDialog.close();scheduleStore.setActiveScope(scheduleStore.primaryScope());offlineScreen.setScope(scheduleStore.primaryScope());showOfflineScreen();showPlanning();planningDialog.importRecognizedText(id,true);
         }catch(Exception invalid){Toast.makeText(this,"识别原文仍需在本机草稿中确认，请重新打开智能整理。",Toast.LENGTH_LONG).show();}
     }
-    private void showReminderSettings(){
-        LinearLayout content=NativeUi.column(this);int p=NativeUi.dp(this,20);content.setPadding(p,0,p,p);
-        content.addView(NativeUi.text(this,"开启后，日程开始前5分钟会在手机上提示。与桌面一样，仅在顺手排保持前台时提醒；锁屏或退出后不会保证通知。",14));
-        android.widget.Switch enabled=new android.widget.Switch(this);enabled.setText("开启本机前台提醒");enabled.setTextSize(16);enabled.setMinHeight(NativeUi.dp(this,52));enabled.setChecked(reminders.isEnabled());content.addView(enabled);
-        enabled.setOnCheckedChangeListener((button,value)->{reminders.setEnabled(value);offlineScreen.setReminderEnabled(value);});
-        new AlertDialog.Builder(this).setTitle("本机提醒").setView(content).setPositiveButton("完成",null).show();
+    private void showReminderSettings(){backgroundSettings.show();}
+    private void refreshBackgroundUi(){
+        if(offlineScreen==null||backgroundSettings==null)return;
+        offlineScreen.setReminderEnabled(reminders.isEnabled()&&ReminderScheduler.notificationsAllowed(this));
+        offlineScreen.setBackgroundHint(backgroundSettings.hint(),backgroundSettings::begin);
+    }
+    private void handleCalendarIntent(Intent intent){
+        if(intent==null)return;
+        if(ACTION_BACKGROUND_SETTINGS.equals(intent.getAction())){intent.setAction(Intent.ACTION_MAIN);handler.post(this::showReminderSettings);}
+        else if(ACTION_REMINDER.equals(intent.getAction())){
+            String id=intent.getStringExtra("event_id");intent.removeExtra("event_id");intent.setAction(Intent.ACTION_MAIN);
+            try{for(org.json.JSONObject event:scheduleStore.list(scheduleStore.primaryScope()))if(event.optString("id").equals(id)){
+                scheduleStore.setActiveScope(scheduleStore.primaryScope());offlineScreen.setScope(scheduleStore.primaryScope());showOfflineScreen();
+                offlineScreen.showDate(java.time.LocalDate.parse(event.getString("start_local").substring(0,10)));break;
+            }}catch(Exception ignored){}
+        }
     }
     private void applyWindowInsets() {
         View root = findViewById(R.id.root);
@@ -275,9 +289,9 @@ public final class MainActivity extends ComponentActivity {
                 cancelPairing();
                 scheduleSync.unpair(peer.optString("peer_id"), error -> {
                     offlineScreen.setStatus(error == null ? "已取消配对，本机日程继续保留" : error);
-                    renderPeers();
+                    runtime.maintainBackground();refreshBackgroundUi();renderPeers();
                 });
-                renderPeers();
+                runtime.maintainBackground();refreshBackgroundUi();renderPeers();
             }).show();
     }
 
@@ -311,13 +325,13 @@ public final class MainActivity extends ComponentActivity {
                 count++; TextView text=new TextView(this);text.setText(peer.optString("name")+" · "+scheduleSync.status(peer.optString("peer_id")));text.setTextSize(14);text.setPadding(0,12,0,4);rows.addView(text);
                 Button remove=new Button(this);remove.setAllCaps(false);remove.setText("取消与此设备配对");remove.setOnClickListener(v->unpairDevice(peer));rows.addView(remove);
             }
-            ((TextView)findViewById(R.id.paired_device)).setText("本机主日程 · "+count+" 台已配对设备\n"+(deviceHost.isRunning()?"前台接收已开启，双方保持应用打开即可合并":"应用回到前台后接收同步"));
+            ((TextView)findViewById(R.id.paired_device)).setText("本机主日程 · "+count+" 台已配对设备\n"+(BackgroundSyncService.isRunning()?"后台同步已开启，双方设备可达时自动合并":deviceHost.isRunning()?"当前可接收同步，可在提醒与后台运行中设置锁屏同步":"暂未接收同步，本机日程已保留"));
             findViewById(R.id.unpair_device).setVisibility(View.GONE);
             findViewById(R.id.local_spaces).setVisibility(scheduleStore.spaces().size()>1?View.VISIBLE:View.GONE);
         } catch(Exception ignored) { }
     }
     private void showConnectionSettings() {
-        hideKeyboard(); scheduleSync.invalidate();
+        hideKeyboard();
         offlineScreen.setVisibility(View.GONE);setupScreen.setVisibility(View.VISIBLE);
         connectionError.setVisibility(View.GONE);renderPeers();
         findViewById(R.id.cancel_connection).setVisibility(View.VISIBLE);
@@ -325,7 +339,7 @@ public final class MainActivity extends ComponentActivity {
 
     private void hideKeyboard(){View focus=getCurrentFocus();if(focus!=null){((InputMethodManager)getSystemService(Context.INPUT_METHOD_SERVICE)).hideSoftInputFromWindow(focus.getWindowToken(),0);focus.clearFocus();}}
     @Override protected void onSaveInstanceState(Bundle state){state.putBoolean("capture_enabling",enablingCapture);state.putBoolean("capture_notified",notificationAsked);state.putString("offline_edit_id",offlineScreen.editingId());state.putString("local_panel",planningDialog!=null&&planningDialog.isShowing()?"planning":modelDialog!=null&&modelDialog.isShowing()?"model":"");super.onSaveInstanceState(state);}
-    @Override protected void onPause(){foreground=false;ScreenCaptureService.setMainVisible(false);if(reminders!=null)reminders.onForeground(false);handler.removeCallbacks(syncTick);cancelPairing();if(scheduleSync!=null)scheduleSync.invalidate();if(pairingDialog!=null){pairingDialog.dismiss();pairingDialog=null;}if(deviceHost!=null)deviceHost.stop();super.onPause();}
-    @Override protected void onResume(){super.onResume();foreground=true;ScreenCaptureService.setMainVisible(true);offlineScreen.setCaptureActive(ScreenCaptureService.isRunning());if(reminders!=null)reminders.onForeground(true);startDeviceHost();if(setupScreen.getVisibility()==View.VISIBLE)renderPeers();handler.removeCallbacks(syncTick);handler.post(syncTick);}
-    @Override protected void onDestroy(){if(reminders!=null)reminders.close();if(pairingDialog!=null)pairingDialog.dismiss();if(planningDialog!=null)planningDialog.close();if(modelDialog!=null)modelDialog.close();if(planningEngine!=null)planningEngine.cancel();if(deviceHost!=null)deviceHost.stop();if(offlineScreen!=null)offlineScreen.destroy();if(scheduleSync!=null)scheduleSync.close();handler.removeCallbacksAndMessages(null);super.onDestroy();}
+    @Override protected void onPause(){foreground=false;ScreenCaptureService.setMainVisible(false);handler.removeCallbacks(syncTick);cancelPairing();if(pairingDialog!=null){pairingDialog.dismiss();pairingDialog=null;}deviceHost.cancelTicket();runtime.visible(this,false);super.onPause();}
+    @Override protected void onResume(){super.onResume();foreground=true;ScreenCaptureService.setMainVisible(true);offlineScreen.setCaptureActive(ScreenCaptureService.isRunning());runtime.visible(this,true);backgroundSettings.refresh();if(setupScreen.getVisibility()==View.VISIBLE)renderPeers();handler.removeCallbacks(syncTick);}
+    @Override protected void onDestroy(){if(pairingDialog!=null)pairingDialog.dismiss();if(planningDialog!=null)planningDialog.close();if(modelDialog!=null)modelDialog.close();if(planningEngine!=null)planningEngine.cancel();if(backgroundSettings!=null)backgroundSettings.close();if(offlineScreen!=null)offlineScreen.destroy();if(runtime!=null){runtime.visible(this,false);runtime.unlisten(runtimeChanged);}handler.removeCallbacksAndMessages(null);super.onDestroy();}
 }

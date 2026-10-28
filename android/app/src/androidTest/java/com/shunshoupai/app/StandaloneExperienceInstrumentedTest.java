@@ -33,7 +33,7 @@ import java.util.function.Function;
 public class StandaloneExperienceInstrumentedTest {
     private Context context;private ActivityScenario<MainActivity> scenario;
     @Before public void open(){
-        context=ApplicationProvider.getApplicationContext();context.deleteDatabase("schedule-offline.sqlite");
+        context=ApplicationProvider.getApplicationContext();BackgroundTestState.reset();context.deleteDatabase("schedule-offline.sqlite");
         for(String name:new String[]{"connection","offline-editor","planning-drafts","local-model-settings-v1","native-workbench"})context.getSharedPreferences(name,Context.MODE_PRIVATE).edit().clear().commit();
         scenario=ActivityScenario.launch(MainActivity.class);
     }

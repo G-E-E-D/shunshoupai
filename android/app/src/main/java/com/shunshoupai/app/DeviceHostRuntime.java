@@ -17,7 +17,7 @@ import java.util.LinkedHashSet;
 import java.util.Set;
 import java.util.UUID;
 
-/** A foreground phone is a full peer: it owns its calendar and revocable LAN grants. */
+/** The UI, background connection or scheduled job owns this full, revocable LAN peer. */
 final class DeviceHostRuntime {
     private final LocalScheduleStore store;
     private final LocalDeviceIdentity identity;
@@ -56,6 +56,7 @@ final class DeviceHostRuntime {
         http.cancel(); server.close();
     }
     boolean isRunning() { return running; }
+    void cancelTicket() { synchronized (ticketLock) { ticketHash = null; ticketDeadline = 0; } }
     int port() { return server.port(); }
     String publicKey() throws Exception { return identity.publicKey(); }
 
