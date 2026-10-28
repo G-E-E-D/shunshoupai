@@ -182,6 +182,7 @@ jobs:
         working-directory: .
         env:
           APP_STORAGE: local
+          APP_DEVICE_BOOTSTRAP_KEY: test-only-device-bootstrap-key-2026
           APP_DB_PATH: ${{ runner.temp }}/android-test.sqlite
           AI_API_KEY: ''
           COOKIE_SECURE: 'false'
@@ -219,6 +220,7 @@ jobs:
           RELEASE_APK_NAME: ${{ steps.release_metadata.outputs.apk_name }}
           EXPECTED_VERSION_NAME: ${{ needs.build.outputs.version }}
           EXPECTED_VERSION_CODE: ${{ needs.build.outputs.version_code }}
+          TEST_DEVICE_BOOTSTRAP_KEY: test-only-device-bootstrap-key-2026
         with:
           api-level: 35
           target: google_apis

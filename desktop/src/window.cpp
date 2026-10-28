@@ -34,6 +34,7 @@
 #include <QShortcut>
 #include <QScrollArea>
 #include <QSpinBox>
+#include <QSysInfo>
 #include <QSplitter>
 #include <QTableWidget>
 #include <QTextEdit>
@@ -103,7 +104,8 @@ void clearLayout(QLayout *layout) {
 }
 }
 
-MainWindow::MainWindow(const QString &origin, bool rememberSession) : api(origin, rememberSession) {
+MainWindow::MainWindow(const QString &origin, bool rememberSession, const QByteArray &bootstrapKey, const QString &deviceName)
+    : api(origin, rememberSession, bootstrapKey), requestedDeviceName(deviceName) {
     setWindowTitle(trText("顺手排 · 我的日程"));
     resize(1320, 880);
     setMinimumSize(1060, 720);
@@ -143,13 +145,13 @@ MainWindow::MainWindow(const QString &origin, bool rememberSession) : api(origin
     header->addWidget(modeLabel);
     modelButton = button(trText("模型"));
     modelButton->setObjectName("textButton"); modelButton->setIcon(Design::icon("sparkle", QColor("#0b57d0")));
-    phoneButton = button(trText("手机登录"));
+    phoneButton = button(trText("配对设备"));
     phoneButton->setObjectName("textButton"); phoneButton->setIcon(Design::icon("qr", QColor("#0b57d0")));
     auto *service = button("");
     service->setObjectName("iconButton"); service->setFixedSize(40, 40); service->setIcon(Design::icon("settings"));
-    service->setToolTip(trText("服务设置")); service->setAccessibleName(trText("服务设置"));
-    accountButton = button(trText("登录"));
-    accountButton->setObjectName("tonalButton"); accountButton->setIcon(Design::icon("person", QColor("#0b57d0")));
+    service->setToolTip(trText("扫描或粘贴配对码")); service->setAccessibleName(trText("扫描或粘贴配对码"));
+    accountButton = button(trText("本机日程"));
+    accountButton->setObjectName("tonalButton"); accountButton->setIcon(Design::icon("desktop", QColor("#0b57d0")));
     header->addWidget(modelButton); header->addWidget(phoneButton); header->addWidget(service); header->addWidget(accountButton);
     layout->addWidget(bar);
 
@@ -174,7 +176,7 @@ MainWindow::MainWindow(const QString &origin, bool rememberSession) : api(origin
     auto *sideNote = new QFrame; sideNote->setObjectName("sidebarNote");
     auto *note = new QVBoxLayout(sideNote); note->setContentsMargins(16, 16, 16, 16); note->setSpacing(8);
     note->addWidget(label(trText("给重要的事，留个位置"), "fieldLabel"));
-    note->addWidget(label(trText("先确认草稿，再安排进日程。手机扫码，就能接着用。"), "fieldHint"));
+    note->addWidget(label(trText("打开就能安排。设备各自保存日程，配对后在局域网自动合并。"), "fieldHint"));
     side->addWidget(sideNote);
     side->addStretch();
     auto *reminder = new QCheckBox(trText("前台开始提醒"));
@@ -184,7 +186,7 @@ MainWindow::MainWindow(const QString &origin, bool rememberSession) : api(origin
     side->addWidget(label(trText("开始前 5 分钟提醒，应用保持打开时生效。"), "fieldHint"));
     auto *accountSummary = new AccountSummary;
     accountSummary->setObjectName("muted");
-    accountSummary->setFullText(trText("登录后与手机同步"));
+    accountSummary->setFullText(trText("本机日程"));
     accountLabel = accountSummary;
     accountLabel->setMaximumWidth(270);
     side->addWidget(accountLabel);
@@ -261,9 +263,9 @@ MainWindow::MainWindow(const QString &origin, bool rememberSession) : api(origin
     layout->addLayout(body, 1);
     status = label(trText("正在连接日程服务…"), "status"); layout->addWidget(status);
     setCentralWidget(root);
-    connect(accountButton, &QPushButton::clicked, this, &MainWindow::auth);
+    connect(accountButton, &QPushButton::clicked, this, [this] { if (owner().isEmpty()) initialize(); else devices(); });
     connect(modelButton, &QPushButton::clicked, this, &MainWindow::models);
-    connect(phoneButton, &QPushButton::clicked, this, &MainWindow::phone);
+    connect(phoneButton, &QPushButton::clicked, this, [this] { if (owner().isEmpty()) connection(); else phone(); });
     connect(service, &QPushButton::clicked, this, &MainWindow::connection);
     connect(create, &QPushButton::clicked, this, [this] { editEvent(); });
     connect(parseButton, &QPushButton::clicked, this, &MainWindow::parse);
@@ -310,10 +312,12 @@ void MainWindow::setSession(const QJsonObject &data) {
     const bool changed = owner() != data.value("user").toObject().value("id").toString();
     session = data;
     sessionChecked = true;
-    static_cast<AccountSummary *>(accountLabel)->setFullText(owner().isEmpty() ? trText("登录后与手机同步") : data.value("user").toObject().value("email").toString());
-    accountButton->setText(owner().isEmpty() ? trText("登录 / 注册") : trText("退出账号"));
+    const auto deviceName = data.value("device").toObject().value("name").toString(trText("本机日程"));
+    static_cast<AccountSummary *>(accountLabel)->setFullText(owner().isEmpty()
+        ? (api.canBootstrap() ? trText("正在准备本机日程") : trText("此设备尚未配对")) : deviceName);
+    accountButton->setText(data.value("role").toString() == "peer" ? trText("已配对日程") : trText("本机日程"));
     modelButton->setEnabled(!owner().isEmpty());
-    phoneButton->setEnabled(!owner().isEmpty());
+    phoneButton->setEnabled((!owner().isEmpty() && data.value("role").toString() == "owner") || (owner().isEmpty() && !api.canBootstrap()));
     modeLabel->setText(data.value("ai_provider").toString() == "model" ? trText("模型整理") : trText("规则体验"));
     if (changed) {
         events = {}; reminded.clear();
@@ -326,11 +330,25 @@ void MainWindow::setSession(const QJsonObject &data) {
     renderEvents();
 }
 void MainWindow::initialize() {
-    const auto result = api.call("GET", "/api/auth/session");
-    if (!result.ok()) { sessionChecked = false; status->setText(trText("暂时未连接，恢复后会自动重试。")); return; }
+    QJsonObject bootstrap{{"name", (requestedDeviceName.isEmpty() ? QSysInfo::machineHostName() : requestedDeviceName).left(60)}, {"platform", "windows"}};
+    if (bootstrap.value("name").toString().isEmpty()) bootstrap.insert("name", trText("这台电脑"));
+    auto result = api.canBootstrap() ? api.call("POST", "/api/devices/bootstrap", bootstrap) : api.call("GET", "/api/auth/session");
+    if (!result.ok() && result.data.value("error").toObject().value("code") == "MIGRATION_REQUIRED") {
+        const auto spaces = result.data.value("error").toObject().value("details").toObject().value("spaces").toArray();
+        const auto selected = chooseLegacySpace(spaces);
+        if (selected.isEmpty()) { sessionChecked = true; status->setText(trText("旧日程仍保留在本机。点击“本机日程”选择要继续使用的一份。")); return; }
+        bootstrap.insert("legacy_space_id", selected);
+        result = api.call("POST", "/api/devices/bootstrap", bootstrap);
+    }
+    if (!result.ok()) {
+        const bool retry = result.status == 0 || result.status >= 500 || result.status == 429;
+        sessionChecked = !retry;
+        status->setText(retry ? trText("暂时未连接，恢复后会自动重试。") : result.error + trText(" 点击“本机日程”可重试。"));
+        return;
+    }
     if (result.data.value("user").toObject().isEmpty()) api.forgetSession();
     setSession(result.data);
-    status->setText(trText("服务已就绪 · ") + api.origin);
+    status->setText(owner().isEmpty() ? trText("此连接尚未配对，点击设备连接按钮粘贴配对链接。") : trText("本机日程已就绪"));
     refresh();
 }
 void MainWindow::refresh() {
@@ -347,6 +365,9 @@ void MainWindow::refresh() {
     miniCalendar->setSelectedDate(day->date());
     miniCalendar->setCurrentPage(day->date().year(), day->date().month());
     if (owner().isEmpty()) { renderEvents(); return; }
+    // The local server queues network exchange and returns immediately. An
+    // offline peer must never turn an ordinary calendar refresh into a wait.
+    if (session.value("role") == "owner") api.call("POST", "/api/peers/sync");
     const QDateTime from(day->date(), QTime(0, 0), zone);
     const auto to = from.addDays(view->currentIndex() == 1 ? 7 : 1);
     const auto query = "?from=" + QString::fromLatin1(QUrl::toPercentEncoding(from.toUTC().toString(Qt::ISODate)))
@@ -354,13 +375,17 @@ void MainWindow::refresh() {
     const auto result = api.call("GET", "/api/events" + query);
     if (!result.ok()) {
         status->setText(trText("同步失败：") + result.error);
-        if (result.status == 401) { api.forgetSession(); setSession({}); status->setText(trText("登录已过期，请重新登录。你的草稿已保留。")); }
+        if (result.status == 401) {
+            api.forgetSession(); setSession({});
+            sessionChecked = !api.canBootstrap();
+            status->setText(api.canBootstrap() ? trText("正在恢复本机日程，草稿仍保留。") : trText("配对已解除或失效，草稿仍保留。重新配对后可继续。"));
+        }
         return;
     }
     const auto freshEvents = result.data.value("events").toArray();
     // An unchanged poll must not recreate focused controls or move the scroll.
     if (freshEvents != events) { events = freshEvents; renderEvents(); }
-    status->setText(trText("已同步 · ") + QTime::currentTime().toString("HH:mm:ss") + " · " + api.origin);
+    status->setText(trText("本机日程已读取 · ") + QTime::currentTime().toString("HH:mm:ss") + " · " + api.origin);
     for (const auto &value : events) {
         const auto event = value.toObject();
         const auto seconds = QDateTime::currentDateTimeUtc().secsTo(localTime(event.value("start_at").toString()));
@@ -413,6 +438,15 @@ void MainWindow::renderEvents() {
         edit->setIcon(Design::icon("edit")); remove->setIcon(Design::icon("delete"));
         edit->setToolTip(trText("编辑日程")); edit->setAccessibleName(trText("编辑日程"));
         remove->setToolTip(trText("删除日程")); remove->setAccessibleName(trText("删除日程"));
+        const auto replicaConflicts = event.value("replica_conflicts").toArray();
+        if (replicaConflicts.size() > 1) {
+            auto *resolve = button(trText("处理 ") + QString::number(replicaConflicts.size()) + trText(" 个版本"));
+            resolve->setObjectName("tonalButton");
+            resolve->setProperty("controlId", "resolveReplica-" + event.value("id").toString());
+            row->addWidget(resolve);
+            connect(resolve, &QPushButton::clicked, this, [this, event] { resolveReplica(event); });
+            toggle->hide(); edit->hide(); remove->hide();
+        }
         row->addWidget(toggle); row->addWidget(edit); row->addWidget(remove);
         connect(edit, &QPushButton::clicked, this, [this, event] { editEvent(event); });
         connect(toggle, &QPushButton::clicked, this, [this, event, complete] {
@@ -435,14 +469,14 @@ void MainWindow::renderEvents() {
         auto *emptyIcon = label("", "emptyIcon"); emptyIcon->setFixedSize(72, 72); emptyIcon->setAlignment(Qt::AlignCenter);
         emptyIcon->setPixmap(Design::icon("calendar", QColor("#1a73e8")).pixmap(34, 34));
         agenda->addWidget(emptyIcon, 0, Qt::AlignHCenter);
-        agenda->addWidget(label(owner().isEmpty() ? trText("登录，开始安排") : trText("给今天留一点空白"), "emptyTitle"), 0, Qt::AlignHCenter);
-        agenda->addWidget(label(owner().isEmpty() ? trText("用自己的账号，让电脑和手机接着安排。") : trText("创建日程，或写下一句话，安排接下来的生活。"), "emptyCopy"), 0, Qt::AlignHCenter);
+        agenda->addWidget(label(owner().isEmpty() ? (api.canBootstrap() ? trText("正在准备本机日程") : trText("配对后连接此设备")) : trText("给今天留一点空白"), "emptyTitle"), 0, Qt::AlignHCenter);
+        agenda->addWidget(label(owner().isEmpty() ? trText("日程只允许本机和已配对设备访问。") : trText("创建日程，或写下一句话，安排接下来的生活。"), "emptyCopy"), 0, Qt::AlignHCenter);
     }
     agenda->addStretch(2);
     summary->setText(trText("我的日程  ·  ") + QString::number(count) + trText(" 项  ·  上海时区"));
 }
 void MainWindow::parse() {
-    if (owner().isEmpty()) { auth(); if (owner().isEmpty()) return; }
+    if (owner().isEmpty()) { initialize(); if (owner().isEmpty()) { if (!api.canBootstrap()) connection(); if (owner().isEmpty()) return; } }
     if (composer->toPlainText().trimmed().isEmpty() || composer->toPlainText().size() > 2000) {
         QMessageBox::information(this, trText("写下你的安排"), trText("请填写 1–2000 字的日程描述。")); return;
     }
@@ -492,10 +526,13 @@ void MainWindow::updateRecoveryButton() {
 int MainWindow::smokeTest(const QString &screenshot) {
     // This exercises the real API and renders this native QWidget tree. It does
     // not open a browser, call a paid model, or touch the user's local database.
-    auto result = api.call("POST", "/api/auth/register", {{"email", "qt-" + newId() + "@example.com"}, {"password", "Qt-test-only-2026!"}});
-    if (!result.ok() || result.data.value("user").isNull()) return 11;
-    setSession(result.data);
-    result = api.call("POST", "/api/ai/parse", {{"text", trText("明天下午三点到四点面试")}, {"timezone", "Asia/Shanghai"}});
+    initialize();
+    if (owner().isEmpty() || !session.value("local_first").toBool() || session.value("role") != "owner") return 11;
+    ApiClient anonymous(api.origin);
+    const auto unauthenticated = anonymous.call("GET", "/api/events?from=2030-01-01T00:00:00Z&to=2030-01-02T00:00:00Z");
+    if (unauthenticated.status != 401) return 24;
+    if (anonymous.call("POST", "/api/devices/bootstrap", {{"name", "Untrusted"}, {"platform", "windows"}}).ok()) return 25;
+    auto result = api.call("POST", "/api/ai/parse", {{"text", trText("明天下午三点到四点面试")}, {"timezone", "Asia/Shanghai"}});
     if (!result.ok() || result.data.value("events").toArray().size() != 1) return 12;
     const auto id = newId();
     const QJsonObject payload{{"request_id", id}, {"events", result.data.value("events")}};
@@ -511,12 +548,16 @@ int MainWindow::smokeTest(const QString &screenshot) {
     auto pair = api.call("POST", "/api/pairing/issue");
     if (!pair.ok() || pair.data.value("token").toString().size() != 43) return 17;
     ApiClient phoneApi(api.origin);
-    result = phoneApi.call("POST", "/api/pairing/redeem", {{"token", pair.data.value("token")}});
+    const QJsonObject redeem{{"token", pair.data.value("token")}, {"device_id", newId()}, {"device_name", trText("测试手机")}, {"platform", "android"}};
+    result = phoneApi.call("POST", "/api/pairing/redeem", redeem);
     if (!result.ok() || result.data.value("user").toObject().value("id").toString() != owner()) return 18;
+    const auto pairedId = result.data.value("pairing_id").toString();
     result = phoneApi.call("GET", "/api/auth/session");
     if (!result.ok() || result.data.value("user").toObject().value("id").toString() != owner()) return 19;
-    result = phoneApi.call("POST", "/api/pairing/redeem", {{"token", pair.data.value("token")}});
+    result = phoneApi.call("POST", "/api/pairing/redeem", redeem);
     if (result.ok()) return 20;
+    if (pairedId.isEmpty() || !api.call("DELETE", "/api/devices/" + pairedId).ok()) return 26;
+    if (phoneApi.call("GET", "/api/events?from=2030-01-01T00:00:00Z&to=2030-01-02T00:00:00Z").status != 401) return 27;
     day->setDate(localTime(saved.value("start_at").toString()).date());
     refresh();
     if (events.size() != 1 || events.at(0).toObject().value("title") != trText("Qt 原生日程")) return 21;

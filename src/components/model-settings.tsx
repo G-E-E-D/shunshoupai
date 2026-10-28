@@ -210,7 +210,7 @@ export default function ModelSettingsPanel({
       apply(next);
       setMessage(
         next.effective_source === "server"
-          ? "已移除个人配置，之后使用服务端默认模型。"
+          ? "已移除个人配置，之后使用设备默认模型。"
           : "已移除个人配置，之后使用规则解析。",
       );
     } catch (error) {
@@ -265,7 +265,7 @@ export default function ModelSettingsPanel({
         {settings.effective_source === "personal"
           ? "个人模型配置"
           : settings.effective_source === "server"
-            ? "服务端默认模型"
+            ? "设备默认模型"
             : "规则解析"}
         {dirty && <span className="unsaved-label">有未保存修改</span>}
       </div>
@@ -317,7 +317,7 @@ export default function ModelSettingsPanel({
           模型名称
           <input
             aria-label="模型名称"
-            placeholder="填写账号可用的模型 ID"
+            placeholder="填写服务商提供的模型 ID"
             autoComplete="off"
             spellCheck={false}
             maxLength={200}
@@ -357,7 +357,7 @@ export default function ModelSettingsPanel({
           <small>
             {settings.has_api_key
               ? `已保存 ${settings.key_hint || "密钥"}，密钥原文不会返回浏览器。更换接口域名时请重新填写 Key。`
-              : "密钥按账号加密保存在服务端，网页和安卓共用。"}
+              : "密钥加密保存在当前连接的设备，配对设备共用。"}
           </small>
         </label>
         <p className="model-format-note">
@@ -405,7 +405,7 @@ export default function ModelSettingsPanel({
         <div className="model-remove">
           {confirmRemove ? (
             <>
-              <p>移除后将使用服务端默认模型，未配置默认模型时使用规则解析。</p>
+              <p>移除后将使用设备默认模型，未配置默认模型时使用规则解析。</p>
               <div>
                 <button
                   className="text-button"

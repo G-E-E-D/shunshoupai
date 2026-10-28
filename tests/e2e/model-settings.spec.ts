@@ -5,6 +5,7 @@ import { randomUUID } from "node:crypto";
 import { mkdir } from "node:fs/promises";
 import type { ModelSettingsInfo } from "../../src/lib/types";
 import { addDays } from "../../src/lib/time";
+import { pairDevice, resetTestDevice } from "./device-fixtures";
 
 type ProviderRequest = {
   authorization: string;
@@ -92,17 +93,10 @@ test.afterAll(async () => {
   );
 });
 
-test.beforeEach(() => {
+test.beforeEach(async ({ page }) => {
   requests.length = 0;
+  await resetTestDevice(page.request);
 });
-
-async function register(page: Page, email: string) {
-  const response = await page.request.post("/api/auth/register", {
-    data: { email, password: "BYOK-test-only-2026!" },
-  });
-  expect(response.status()).toBe(200);
-  await loadPage(page);
-}
 
 async function loadPage(page: Page) {
   const loaded = page.waitForResponse((response) =>
@@ -110,13 +104,13 @@ async function loadPage(page: Page) {
   );
   await page.goto("/");
   await loaded;
-  await expect(page.locator(".sync-badge")).toHaveText("已同步");
+  await expect(page.locator(".sync-badge")).toHaveText("连接正常");
 }
 
 async function openModelSettings(page: Page) {
   await page
     .locator("header")
-    .getByRole("button", { name: "打开账号设置", exact: true })
+    .getByRole("button", { name: "打开设备与同步", exact: true })
     .click();
   await page
     .getByRole("dialog")
@@ -137,13 +131,12 @@ async function settings(page: Page): Promise<ModelSettingsInfo> {
   return body.settings as ModelSettingsInfo;
 }
 
-test("personal model setup is tested before save, synchronized by account and used with the fixed prompt", async ({
+test("personal model setup is tested before save, shared with paired devices and used with the fixed prompt", async ({
   page,
   browser,
 }) => {
   await page.setViewportSize({ width: 1440, height: 1200 });
-  const email = `byok-${randomUUID()}@example.com`;
-  await register(page, email);
+  await loadPage(page);
   let dialog = await openModelSettings(page);
   await dialog.getByLabel("Base URL", { exact: true }).fill(providerBase);
   await dialog.getByLabel("模型名称", { exact: true }).fill("personal-model");
@@ -180,8 +173,8 @@ test("personal model setup is tested before save, synchronized by account and us
     fullPage: true,
   });
 
-  // A second independent browser can retrieve the same account's metadata,
-  // while a different account cannot retrieve or reuse the credential.
+  // A paired device shares this local space; an unpaired browser cannot
+  // retrieve metadata or use the saved model credential.
   const secondContext = await browser.newContext({
     baseURL: "http://localhost:3001",
     viewport: { width: 360, height: 800 },
@@ -190,13 +183,7 @@ test("personal model setup is tested before save, synchronized by account and us
   });
   const second = await secondContext.newPage();
   try {
-    expect(
-      (
-        await second.request.post("/api/auth/login", {
-          data: { email, password: "BYOK-test-only-2026!" },
-        })
-      ).status(),
-    ).toBe(200);
+    await pairDevice(page.request, second.request);
     await loadPage(second);
     const secondDialog = await openModelSettings(second);
     await expect(
@@ -223,11 +210,10 @@ test("personal model setup is tested before save, synchronized by account and us
     });
     try {
       const other = await otherContext.newPage();
-      await register(other, `byok-other-${randomUUID()}@example.com`);
-      const isolated = await settings(other);
-      expect(isolated.configured).toBe(false);
-      expect(isolated.has_api_key).toBe(false);
-      expect(isolated.base_url).not.toBe(providerBase);
+      const isolated = await other.request.get("/api/model-settings");
+      expect(isolated.status()).toBe(401);
+      expect(await isolated.text()).not.toContain(providerBase);
+      expect(await isolated.text()).not.toContain(key);
     } finally {
       await otherContext.close();
     }
@@ -275,7 +261,7 @@ test("personal model setup is tested before save, synchronized by account and us
 test("connection failure remains unsaved and upstream error messages never reveal the key", async ({
   page,
 }) => {
-  await register(page, `byok-failure-${randomUUID()}@example.com`);
+  await loadPage(page);
   const dialog = await openModelSettings(page);
   await dialog.getByLabel("Base URL", { exact: true }).fill(providerBase);
   await dialog.getByLabel("模型名称", { exact: true }).fill("failing-model");
@@ -295,9 +281,9 @@ test("connection failure remains unsaved and upstream error messages never revea
 test("model settings reject prompt overrides and removal preserves a version tombstone", async ({
   page,
 }) => {
-  await register(page, `byok-api-${randomUUID()}@example.com`);
+  await loadPage(page);
   const supplied = {
-    base_version: 0,
+    base_version: (await settings(page)).version,
     base_url: providerBase,
     model: "personal-model",
     api_key: key,
@@ -342,8 +328,8 @@ test("model settings reject prompt overrides and removal preserves a version tom
   ).toBe(200);
 });
 
-test("a one-use desktop QR logs a clean mobile client into the same account and erases the code", async ({ page, browser }) => {
-  await register(page, `pair-${randomUUID()}@example.com`);
+test("a one-use device QR connects a clean browser and the owner can revoke it", async ({ page, browser }) => {
+  await loadPage(page);
   const source = await (await page.request.get("/api/auth/session")).json();
   const issued = await page.request.post("/api/pairing/issue", { data: {} });
   expect(issued.status()).toBe(200);
@@ -356,30 +342,50 @@ test("a one-use desktop QR logs a clean mobile client into the same account and 
     const mobile = await mobileContext.newPage();
     const exchanged = mobile.waitForResponse(r => r.url().endsWith("/api/pairing/redeem"));
     await mobile.goto(`/mobile#pair=${ticket.token}`);
+    await expect(mobile.getByRole("dialog")).toContainText("也可能经对方传到它已配对的其他设备");
+    await mobile.getByRole("button", { name: "同意配对并共享日程", exact: true }).click();
     expect((await exchanged).status()).toBe(200);
-    await expect(mobile.locator(".sync-badge")).toHaveText("已同步");
+    await expect(mobile.locator(".sync-badge")).toHaveText("连接正常");
     expect(new URL(mobile.url()).hash).toBe("");
     const current = await (await mobile.request.get("/api/auth/session")).json();
     expect(current.user.id).toBe(source.user.id);
+    expect(current.role).toBe("peer");
     const cookies = await mobileContext.cookies();
-    expect(cookies.some(cookie => cookie.name === "shunshoupai_session" && cookie.httpOnly)).toBe(true);
+    expect(cookies.some(cookie => cookie.httpOnly)).toBe(true);
     expect(await mobile.evaluate(() => JSON.stringify({ local: { ...localStorage }, session: { ...sessionStorage } }))).not.toContain(ticket.token);
-    const replay = await mobile.request.post("/api/pairing/redeem", { data: { token: ticket.token } });
+    const replay = await mobile.request.post("/api/pairing/redeem", { data: { token: ticket.token, device_id: randomUUID(), device_name: "重放设备", platform: "test" } });
     expect(replay.status()).toBe(400);
-    // The phone has an independent local session after the one-time grant.
-    expect((await page.request.post("/api/auth/logout", { data: {} })).status()).toBe(200);
-    expect((await (await mobile.request.get("/api/auth/session")).json()).user.id).toBe(source.user.id);
+    await page.locator("header").getByRole("button", { name: "打开设备与同步", exact: true }).click();
+    const row = page.locator(`[data-device-id="${current.peer.id}"]`);
+    await row.getByRole("button", { name: "解除配对：网页设备", exact: true }).click();
+    await row.getByRole("button", { name: "确认解除配对", exact: true }).click();
+    await expect(row).toHaveCount(0);
+    expect((await mobile.request.get("/api/model-settings")).status()).toBe(401);
+    await mobile.reload();
+    await expect(mobile.locator(".sync-badge")).toHaveText("尚未配对");
+    await expect(mobile.getByRole("button", { name: /登录|注册/ })).toHaveCount(0);
   } finally { await mobileContext.close(); }
 });
 
-test("QR grants reject hostile origins and are revoked when the issuing session logs out", async ({ page }) => {
-  await register(page, `pair-revoke-${randomUUID()}@example.com`);
+test("pairing rejects hostile origins and a peer can disconnect without deleting schedules", async ({ page, browser }) => {
+  await loadPage(page);
   const hostile = await page.request.post("/api/pairing/issue", { data: {}, headers: { Origin: "https://untrusted.example" } });
   expect(hostile.status()).toBe(403);
-  const ticket = await (await page.request.post("/api/pairing/issue", { data: {} })).json();
-  expect((await page.request.post("/api/auth/logout", { data: {} })).status()).toBe(200);
-  const revoked = await page.request.post("/api/pairing/redeem", { data: { token: ticket.token } });
-  expect(revoked.status()).toBe(400);
-  const invalid = await page.request.post("/api/pairing/redeem", { data: { token: "invalid" } });
-  expect(invalid.status()).toBe(400);
+  const peerContext = await browser.newContext({ baseURL: "http://localhost:3001" });
+  try {
+    const peer = await peerContext.newPage();
+    const session = await pairDevice(page.request, peer.request, "随身设备");
+    expect((await peer.request.post("/api/pairing/issue", { data: {} })).status()).toBe(403);
+    await loadPage(peer);
+    await peer.locator("header").getByRole("button", { name: "打开设备与同步", exact: true }).click();
+    await peer.getByRole("button", { name: "解除配对：随身设备", exact: true }).click();
+    await peer.getByRole("button", { name: "确认解除配对", exact: true }).click();
+    await expect(peer.getByRole("dialog")).not.toBeVisible();
+    expect((await peer.request.get("/api/model-settings")).status()).toBe(401);
+    const source = await (await page.request.get("/api/auth/session")).json();
+    expect(source.user.id).toBe(session.user!.id);
+    expect(source.role).toBe("owner");
+    const invalid = await page.request.post("/api/pairing/redeem", { data: { token: "invalid", device_id: randomUUID(), device_name: "无效设备", platform: "test" } });
+    expect(invalid.status()).toBe(400);
+  } finally { await peerContext.close(); }
 });

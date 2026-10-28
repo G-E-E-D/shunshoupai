@@ -3,14 +3,18 @@
 #include "modern_calendar.h"
 #include "qrcodegen.hpp"
 #include "draft_state.h"
+#include "qr_decoder.h"
+#include "pairing_input.h"
 #include <QApplication>
 #include <QButtonGroup>
 #include <QComboBox>
+#include <QClipboard>
 #include <QCryptographicHash>
 #include <QDateEdit>
 #include <QDateTimeEdit>
 #include <QDialog>
 #include <QFrame>
+#include <QFileDialog>
 #include <QGraphicsDropShadowEffect>
 #include <QHeaderView>
 #include <QHostAddress>
@@ -19,13 +23,16 @@
 #include <QLabel>
 #include <QLineEdit>
 #include <QMouseEvent>
+#include <QMimeData>
 #include <QPainter>
 #include <QPushButton>
+#include <QRadioButton>
 #include <QScreen>
 #include <QSignalBlocker>
 #include <QScrollArea>
 #include <QStyle>
 #include <QStyledItemDelegate>
+#include <QSysInfo>
 #include <QTableWidget>
 #include <QTextEdit>
 #include <QTimer>
@@ -33,6 +40,7 @@
 #include <QUuid>
 #include <QVBoxLayout>
 #include <QWindow>
+#include <functional>
 #include <stdexcept>
 
 namespace {
@@ -70,6 +78,7 @@ struct DialogUi {
     QVBoxLayout *body;
     QLabel *title;
     QLabel *subtitle;
+    std::function<void()> fit;
 };
 
 DialogUi prepare(QDialog &dialog, const QString &name, const QString &title,
@@ -143,7 +152,7 @@ DialogUi prepare(QDialog &dialog, const QString &name, const QString &title,
     body->setProperty("footerTarget", QVariant::fromValue<QObject *>(fixedFooter));
     // Fit small laptop screens without compressing fields or hiding actions.
     // The title and footer stay fixed; only long form content scrolls.
-    QTimer::singleShot(0, &dialog, [&dialog, scroll, content, surface, surfaceLayout, fixedFooter, width] {
+    auto fit = [&dialog, scroll, content, surface, surfaceLayout, fixedFooter, width] {
         dialog.setFixedWidth(width);
         dialog.layout()->activate();
         surfaceLayout->activate();
@@ -163,8 +172,9 @@ DialogUi prepare(QDialog &dialog, const QString &name, const QString &title,
         position.moveLeft(qBound(bounds.left(), position.left(), qMax(bounds.left(), bounds.right() - position.width() + 1)));
         position.moveTop(qBound(bounds.top(), position.top(), qMax(bounds.top(), bounds.bottom() - position.height() + 1)));
         dialog.move(position.topLeft());
-    });
-    return {body, titleLabel, description};
+    };
+    QTimer::singleShot(0, &dialog, fit);
+    return {body, titleLabel, description, fit};
 }
 
 void field(QVBoxLayout *layout, const QString &title, QWidget *editor,
@@ -220,16 +230,6 @@ bool confirm(QWidget *parent, const QString &title, const QString &description,
     QObject::connect(proceed, &QPushButton::clicked, &dialog, &QDialog::accept);
     footer(ui.body, proceed, cancel);
     return dialog.exec() == QDialog::Accepted;
-}
-
-void information(QWidget *parent, const QString &title, const QString &description) {
-    QDialog dialog(parent);
-    auto ui = prepare(dialog, "informationDialog", title, description, 500);
-    auto *ok = action(text("知道了"), "primary");
-    ok->setDefault(true);
-    QObject::connect(ok, &QPushButton::clicked, &dialog, &QDialog::accept);
-    footer(ui.body, ok, nullptr);
-    dialog.exec();
 }
 
 // 0 = decide later, 1 = use the remote state, 2 = explicitly keep local edits.
@@ -342,79 +342,133 @@ public:
 };
 }
 
-void MainWindow::auth() {
-    if (!owner().isEmpty()) {
-        if (!confirm(this, text("退出当前账号？"), text("未提交的草稿与待确认保存会按账号保留，下次登录后可以继续。"), text("退出账号"))) return;
-        const auto result = api.call("POST", "/api/auth/logout");
-        api.forgetSession();
-        setSession({});
-        status->setText(result.ok() ? text("已退出登录。") : text("已退出本机登录。服务暂时不可用，远端会话将在到期后失效。"));
-        return;
-    }
+QString MainWindow::chooseLegacySpace(const QJsonArray &spaces) {
+    if (spaces.isEmpty()) return {};
     QDialog dialog(this);
-    auto ui = prepare(dialog, "authDialog", text("欢迎回来"), text("登录一次，下次打开会自动接着使用。"), 508);
-    auto *tabs = new QFrame;
-    tabs->setObjectName("segmentedBar");
-    auto *tabLayout = new QHBoxLayout(tabs);
-    tabLayout->setContentsMargins(4, 4, 4, 4);
-    tabLayout->setSpacing(4);
-    auto *login = action(text("登录"), "segmentButton");
-    auto *registration = action(text("创建账号"), "segmentButton");
-    login->setProperty("controlId", "authLoginTab");
-    registration->setProperty("controlId", "authRegisterTab");
-    login->setAccessibleName(text("登录账号"));
-    registration->setAccessibleName(text("创建新账号"));
-    login->setCheckable(true);
-    registration->setCheckable(true);
-    auto *group = new QButtonGroup(&dialog);
-    group->addButton(login, 0);
-    group->addButton(registration, 1);
-    login->setChecked(true);
-    tabLayout->addWidget(login);
-    tabLayout->addWidget(registration);
-    ui.body->addWidget(tabs);
-    QLineEdit email, password;
-    email.setObjectName("authEmail");
-    email.setPlaceholderText("you@example.com");
-    email.setClearButtonEnabled(true);
-    email.setInputMethodHints(Qt::ImhEmailCharactersOnly | Qt::ImhNoAutoUppercase);
-    const auto emailKey = "last_email/" + QString::fromLatin1(QCryptographicHash::hash(api.origin.toUtf8(), QCryptographicHash::Sha256).toHex());
-    email.setText(settings.value(emailKey).toString());
-    password.setObjectName("authPassword");
-    password.setEchoMode(QLineEdit::Password);
-    password.setPlaceholderText(text("输入你的密码"));
-    field(ui.body, text("邮箱地址"), &email);
-    field(ui.body, text("密码"), &password);
+    auto ui = prepare(dialog, "legacySpaceDialog", text("继续使用哪份旧日程？"),
+        text("本机保存了多份旧日程。选择一份继续使用，其他数据仍保留，不需要登录。"), 570);
+    QComboBox choice;
+    choice.setObjectName("legacySpaceChoice");
+    installModernComboBox(&choice);
+    for (const auto &entry : spaces) {
+        const auto space = entry.toObject();
+        choice.addItem(space.value("label").toString(text("旧日程")), space.value("id").toString());
+    }
+    field(ui.body, text("已有日程"), &choice);
+    auto *proceed = action(text("继续使用这份日程"), "primary");
+    proceed->setProperty("controlId", "legacySpaceContinue");
+    auto *later = action(text("稍后选择"), "textButton");
+    connect(proceed, &QPushButton::clicked, &dialog, &QDialog::accept);
+    connect(later, &QPushButton::clicked, &dialog, &QDialog::reject);
+    footer(ui.body, proceed, later);
+    return dialog.exec() == QDialog::Accepted ? choice.currentData().toString() : QString{};
+}
+
+void MainWindow::devices() {
+    if (owner().isEmpty()) { initialize(); return; }
+    const auto initial = api.call("GET", "/api/devices");
+    if (!initial.ok()) { showError(initial); return; }
+    QDialog dialog(this);
+    auto ui = prepare(dialog, "devicesDialog", text("已配对设备"),
+        text("配对后在同一局域网自动合并日程。解除配对只停止后续同步，两端已有日程都会保留。"), 650);
+    auto *list = new QVBoxLayout;
+    list->setSpacing(12);
+    ui.body->addLayout(list);
     auto *notice = messageArea(ui.body);
-    auto *submit = action(text("登录"), "primary");
-    submit->setProperty("controlId", "authSubmit");
-    submit->setDefault(true);
-    submit->setMinimumHeight(48);
-    ui.body->addWidget(submit);
-    ui.body->addWidget(copy(text("你的日程与模型配置仅对自己的账号可见。"), "fieldHint"));
-    connect(group, &QButtonGroup::idClicked, &dialog, [&](int index) {
-        const bool registering = index == 1;
-        ui.title->setText(registering ? text("让安排有个新家") : text("欢迎回来"));
-        ui.subtitle->setText(registering ? text("创建自己的账号，开始整理每一天。") : text("登录一次，下次打开会自动接着使用。"));
-        submit->setText(registering ? text("创建账号") : text("登录"));
-        password.setPlaceholderText(registering ? text("设置至少 8 位密码") : text("输入你的密码"));
-        password.clear();
-        message(notice, {});
-    });
-    connect(submit, &QPushButton::clicked, &dialog, [&] {
-        const auto result = api.call("POST", group->checkedId() == 0 ? "/api/auth/login" : "/api/auth/register",
-            {{"email", email.text().trimmed()}, {"password", password.text()}});
+    bool firstLoad = true;
+    QJsonObject lastSnapshot;
+    std::function<void()> reload;
+    reload = [&] {
+        const auto result = firstLoad ? initial : api.call("GET", "/api/devices");
+        firstLoad = false;
         if (!result.ok()) { message(notice, result.error, true); return; }
-        password.clear();
-        if (result.data.value("user").isNull()) { message(notice, result.data.value("message").toString()); return; }
-        settings.setValue(emailKey, email.text().trimmed());
-        setSession(result.data);
-        dialog.accept();
-    });
-    connect(&password, &QLineEdit::returnPressed, submit, &QPushButton::click);
-    if (email.text().isEmpty()) email.setFocus(); else password.setFocus();
-    if (dialog.exec() == QDialog::Accepted) refresh();
-    password.clear();
+        if (result.data == lastSnapshot) return;
+        lastSnapshot = result.data;
+        while (auto *item = list->takeAt(0)) { if (item->widget()) { item->widget()->hide(); item->widget()->deleteLater(); } delete item; }
+        const auto entries = result.data.value("devices").toArray();
+        int paired = 0;
+        QSet<QString> peers;
+        for (const auto &entry : result.data.value("peers").toArray()) {
+            const auto peer = entry.toObject();
+            const auto id = peer.value("id").toString();
+            peers.insert(id); ++paired;
+            auto *card = new QFrame; card->setObjectName("tonalCard");
+            auto *row = new QHBoxLayout(card);
+            auto *details = new QVBoxLayout;
+            const auto name = peer.value("name").toString(text("已配对设备"));
+            details->addWidget(copy(name, "fieldLabel"));
+            const auto synced = localTime(peer.value("last_sync_at").toString());
+            const auto error = peer.value("error").toString();
+            details->addWidget(copy(peer.value("pending").toBool() ? text("正在建立连接…")
+                : !error.isEmpty() ? text("暂时无法同步，连接恢复后会自动继续")
+                : synced.isValid() ? text("最近同步 ") + synced.toString("MM-dd HH:mm") : text("已配对，等待首次同步"), "fieldHint"));
+            if (!error.isEmpty()) card->setToolTip(error.left(500));
+            row->addLayout(details, 1);
+            auto *remove = action(text("解除配对"), "textButton");
+            remove->setProperty("controlId", "peerRemove-" + id);
+            row->addWidget(remove);
+            connect(remove, &QPushButton::clicked, &dialog, [&, id, name] {
+                if (!confirm(&dialog, text("解除与“") + name + text("”的配对？"), text("停止后续交换。对方和其他设备已收到的日程副本不会删除或撤回。"), text("解除配对"))) return;
+                const auto removed = api.call("DELETE", "/api/peers/" + id);
+                if (!removed.ok()) { message(notice, removed.error, true); return; }
+                reload(); message(notice, text("已解除配对，本机日程完整保留。"));
+            });
+            list->addWidget(card);
+        }
+        for (const auto &entry : entries) {
+            const auto device = entry.toObject();
+            const bool local = device.value("local").toBool();
+            if (!local && peers.contains(device.value("client_id").toString())) continue;
+            if (!local) ++paired;
+            auto *card = new QFrame;
+            card->setObjectName("tonalCard");
+            auto *row = new QHBoxLayout(card);
+            auto *details = new QVBoxLayout;
+            const auto name = device.value("name").toString(text("已配对设备"));
+            details->addWidget(copy(name, "fieldLabel"));
+            const auto seen = localTime(device.value("last_seen_at").toString());
+            const auto platform = device.value("platform") == "windows" ? text("电脑")
+                : device.value("platform") == "android" ? text("手机") : text("设备");
+            details->addWidget(copy(local ? text("本机日程 · 无需登录")
+                : platform + (seen.isValid() ? text(" · 最近连接 ") + seen.toString("MM-dd HH:mm") : text(" · 等待连接")), "fieldHint"));
+            row->addLayout(details, 1);
+            if (!local && (session.value("role") == "owner" || device.value("current").toBool())) {
+                auto *remove = action(text("解除配对"), "textButton");
+                const auto id = device.value("id").toString();
+                remove->setProperty("controlId", "unpair-" + id);
+                row->addWidget(remove);
+                connect(remove, &QPushButton::clicked, &dialog, [&, id, name, device] {
+                    if (!confirm(&dialog, text("解除与“") + name + text("”的配对？"), text("后续不再同步；两端已经保存的日程都会保留。"), text("解除配对"))) return;
+                    const auto removed = api.call("DELETE", "/api/devices/" + id);
+                    if (!removed.ok()) { message(notice, removed.error, true); return; }
+                    if (device.value("current").toBool()) { api.forgetSession(); setSession({}); dialog.accept(); return; }
+                    reload();
+                    message(notice, text("已解除配对，本机日程完整保留。"));
+                });
+            }
+            list->addWidget(card);
+        }
+        if (paired == 0) list->addWidget(copy(text("还没有配对其他设备。手机也能独立使用，需要合并日程时再扫码配对。"), "fieldHint"));
+        const auto connection = result.data.value("connection").toObject();
+        if (connection.value("state") == "connecting") message(notice, text("正在连接对方设备，成功后自动合并日程…"));
+        else if (connection.value("state") == "failed") message(notice, connection.value("error").toString(text("暂时无法配对，请检查两台设备的局域网连接后重试。")), true);
+        else if (connection.value("state") == "connected") message(notice, text("设备已配对，日程会自动合并。"));
+        QTimer::singleShot(0, &dialog, ui.fit);
+    };
+    auto *close = action(text("完成"), "textButton");
+    auto *pair = action(text("配对新设备"), "primary");
+    pair->setProperty("controlId", "devicesPair");
+    pair->setVisible(session.value("role") == "owner");
+    connect(close, &QPushButton::clicked, &dialog, &QDialog::accept);
+    connect(pair, &QPushButton::clicked, &dialog, [&] { phone(); reload(); });
+    footer(ui.body, pair, close);
+    reload();
+    QTimer updates;
+    updates.setInterval(2000);
+    connect(&updates, &QTimer::timeout, &dialog, [&] { if (!api.busy() && QApplication::activeModalWidget() == &dialog) reload(); });
+    updates.start();
+    dialog.exec();
+    refresh();
 }
 
 void MainWindow::drafts(QJsonArray rows, QString request) {
@@ -567,8 +621,78 @@ void MainWindow::drafts(QJsonArray rows, QString request) {
     refresh();
 }
 
+bool MainWindow::resolveReplica(const QJsonObject &event) {
+    const auto path = "/api/events/" + event.value("id").toString();
+    auto loaded = api.call("GET", path);
+    if (!loaded.ok()) { showError(loaded); return false; }
+    QJsonObject latest = loaded.data.value("event").toObject();
+    if (latest.value("replica_conflicts").toArray().size() < 2) {
+        refresh(); status->setText(text("其他设备已处理这些版本，日程已刷新。")); return true;
+    }
+    QDialog dialog(this);
+    auto ui = prepare(dialog, "replicaDialog", text("选择要保留的日程版本"),
+        text("几台设备分别修改了这条日程。所有版本都已保留，请核对后明确选择，不会按修改时间自动覆盖。"), 710);
+    auto *versions = new QVBoxLayout;
+    versions->setSpacing(12); ui.body->addLayout(versions);
+    auto *notice = messageArea(ui.body);
+    auto *save = action(text("采用选中版本"), "primary");
+    save->setProperty("controlId", "replicaResolve"); save->setEnabled(false);
+    auto *later = action(text("稍后处理"), "textButton");
+    auto *reload = action(text("刷新版本"), "textButton");
+    reload->setProperty("controlId", "replicaRefresh");
+    footer(ui.body, save, later, reload);
+    QButtonGroup choices(&dialog);
+    QString selected;
+    bool resolved = false;
+    auto render = [&] {
+        selected.clear(); save->setEnabled(false);
+        for (auto *button : choices.buttons()) choices.removeButton(button);
+        while (auto *item = versions->takeAt(0)) { if (item->widget()) { item->widget()->hide(); item->widget()->deleteLater(); } delete item; }
+        for (const auto &value : latest.value("replica_conflicts").toArray()) {
+            const auto revision = value.toObject();
+            const auto payload = revision.value("payload").toObject();
+            auto *card = new QFrame; card->setObjectName("tonalCard");
+            auto *column = new QVBoxLayout(card);
+            auto *choice = new QRadioButton(payload.value("deleted").toBool() ? text("删除这条日程") : payload.value("title").toString());
+            const auto revisionId = revision.value("revision_id").toString();
+            choice->setProperty("revisionId", revisionId);
+            choice->setMinimumHeight(36); choices.addButton(choice); column->addWidget(choice);
+            const auto author = revision.value("author").toString(text("其他设备"));
+            const auto changed = revision.value("changed_at").isDouble()
+                ? QDateTime::fromMSecsSinceEpoch(revision.value("changed_at").toInteger(), QTimeZone("Asia/Shanghai")) : QDateTime{};
+            column->addWidget(copy(author + (changed.isValid() ? text(" · 修改于 ") + changed.toString("MM-dd HH:mm") : ""), "fieldHint"));
+            if (payload.value("deleted").toBool()) column->addWidget(copy(payload.value("title").toString(), "fieldHint"));
+            else {
+                const auto start = QDateTime::fromString(payload.value("start_local").toString(), Qt::ISODate);
+                const auto end = QDateTime::fromString(payload.value("end_local").toString(), Qt::ISODate);
+                column->addWidget(copy(start.toString("yyyy-MM-dd HH:mm") + " – " + end.toString("yyyy-MM-dd HH:mm")
+                    + (payload.value("status") == "completed" ? text(" · 已完成") : text(" · 待进行")), "fieldHint"));
+            }
+            connect(choice, &QRadioButton::toggled, &dialog, [&, revisionId](bool checked) { if (checked) { selected = revisionId; save->setEnabled(true); } });
+            versions->addWidget(card);
+        }
+        QTimer::singleShot(0, &dialog, ui.fit);
+    };
+    connect(later, &QPushButton::clicked, &dialog, &QDialog::reject);
+    connect(reload, &QPushButton::clicked, &dialog, [&] {
+        const auto fresh = api.call("GET", path);
+        if (!fresh.ok()) { message(notice, fresh.error, true); return; }
+        latest = fresh.data.value("event").toObject();
+        if (latest.value("replica_conflicts").toArray().size() < 2) { resolved = true; dialog.accept(); return; }
+        render(); message(notice, text("已取得最新版本，请重新选择要保留的内容。"));
+    });
+    connect(save, &QPushButton::clicked, &dialog, [&] {
+        if (selected.isEmpty()) return;
+        const auto result = api.call("POST", path + "/resolve", {{"base_version", latest.value("version")}, {"revision_id", selected}});
+        if (!result.ok()) { message(notice, result.error + text(" 所有版本仍保留，可刷新版本后重新核对。"), true); return; }
+        resolved = true; dialog.accept();
+    });
+    render(); dialog.exec(); refresh();
+    return resolved;
+}
+
 void MainWindow::editEvent(QJsonObject event) {
-    if (owner().isEmpty()) { auth(); if (owner().isEmpty()) return; }
+    if (owner().isEmpty()) { initialize(); if (owner().isEmpty()) { if (!api.canBootstrap()) connection(); if (owner().isEmpty()) return; } }
     if (event.isEmpty() && (!DraftState::read(settings, pendingKey(api.origin, owner())).isEmpty()
         || !DraftState::read(settings, DraftState::key("review", api.origin, owner())).isEmpty())) {
         restorePending(); return;
@@ -665,6 +789,11 @@ void MainWindow::editEvent(QJsonObject event) {
         auto result = api.call("PATCH", "/api/events/" + event.value("id").toString(), patch);
         if (!result.ok()) {
             const auto code = result.data.value("error").toObject().value("code").toString();
+            if (code == "REPLICA_CONFLICT") {
+                const bool handled = resolveReplica(event);
+                message(notice, handled ? text("版本已处理，你的编辑草稿仍保留。再次保存时会核对最新日程。") : text("各端版本和你的编辑草稿均已保留，可稍后继续处理。"));
+                return;
+            }
             if (code != "VERSION_CONFLICT" && code != "NOT_FOUND") { message(notice, result.error, true); return; }
             const auto latest = api.call("GET", "/api/events/" + event.value("id").toString());
             if (!latest.ok() && latest.status != 404) {
@@ -708,7 +837,7 @@ void MainWindow::models() {
     if (!loaded.ok()) { showError(loaded); return; }
     auto config = loaded.data.value("settings").toObject();
     QDialog dialog(this);
-    auto ui = prepare(dialog, "modelDialog", text("连接你的模型"), text("使用自己的模型接口，电脑与手机共用一份配置。"), 640);
+    auto ui = prepare(dialog, "modelDialog", text("连接你的模型"), text("设置这台电脑整理日程时使用的模型。"), 640);
     auto *note = new QFrame;
     note->setObjectName("tonalCard");
     auto *noteLayout = new QVBoxLayout(note);
@@ -753,7 +882,7 @@ void MainWindow::models() {
         config = result.data.value("settings").toObject();
         key.setPlaceholderText(text("留空保留密钥 · ") + config.value("key_hint").toString());
         modeLabel->setText(text("个人模型"));
-        message(notice, text("配置已保存，手机同账号也会使用这份配置。"));
+        message(notice, text("模型配置已保存在本机。"));
     });
     connect(remove, &QPushButton::clicked, &dialog, [&] {
         if (!confirm(&dialog, text("移除个人模型？"), text("移除后将使用服务端默认模型；没有默认模型时，使用规则解析。"), text("移除配置"))) return;
@@ -773,15 +902,15 @@ void MainWindow::phone() {
     auto info = api.call("GET", "/api/connection-info");
     if (!info.ok()) { showError(info); return; }
     QDialog dialog(this);
-    auto ui = prepare(dialog, "phoneDialog", text("手机接着安排"), text("打开安卓应用，点击“扫码连接”，即可登录同一账号。"), 560);
-    ui.body->addWidget(copy(session.value("user").toObject().value("email").toString(), "accountPill"));
+    auto ui = prepare(dialog, "phoneDialog", text("显示我的配对码"), text("配对会合并全部日程；后续修改也可能经对方传播到其其他已配对设备。解除配对不会撤回已同步的副本。"), 620);
+    ui.body->addWidget(copy(session.value("device").toObject().value("name").toString(text("这台电脑")), "accountPill"));
     QComboBox address;
     address.setObjectName("phoneAddress");
     address.setEditable(true);
     installModernComboBox(&address);
     for (const auto &value : info.data.value("candidates").toArray()) address.addItem(value.toString());
     if (address.count() == 0) address.setEditText(info.data.value("current_origin").toString());
-    field(ui.body, text("手机可访问的服务地址"), &address);
+    field(ui.body, text("本机局域网地址"), &address);
     auto *qrCard = new QFrame;
     qrCard->setObjectName("qrCard");
     auto *qrLayout = new QVBoxLayout(qrCard);
@@ -789,29 +918,52 @@ void MainWindow::phone() {
     QLabel image;
     image.setObjectName("phoneQr");
     image.setAlignment(Qt::AlignCenter);
-    image.setText(text("生成登录码后，在手机上扫描"));
+    image.setText(text("正在准备设备配对码"));
     image.setMinimumHeight(250);
     qrLayout->addWidget(&image);
     ui.body->addWidget(qrCard);
+    QString pairingUrl;
+    QImage pairingImage;
+    auto *copyActions = new QHBoxLayout;
+    auto *copyLink = action(text("复制链接"), "textButton");
+    auto *copyImage = action(text("复制二维码"), "textButton");
+    auto *saveImage = action(text("保存二维码图片"), "textButton");
+    copyLink->setProperty("controlId", "pairCopyLink"); copyImage->setProperty("controlId", "pairCopyImage");
+    copyLink->setEnabled(false); copyImage->setEnabled(false); saveImage->setEnabled(false);
+    copyActions->addStretch(); copyActions->addWidget(copyLink); copyActions->addWidget(copyImage); copyActions->addWidget(saveImage); copyActions->addStretch();
+    ui.body->addLayout(copyActions);
     auto *notice = messageArea(ui.body);
-    message(notice, text("同一 Wi-Fi 下选择电脑局域网地址。登录码有效 90 秒，仅可使用一次，请勿转发。"));
-    auto *generate = action(text("生成登录二维码"), "primary");
+    message(notice, text("两台设备连接同一 Wi-Fi。配对码有效 90 秒，仅限自己的设备扫描。"));
+    auto *generate = action(text("刷新配对码"), "primary");
     generate->setDefault(true);
     generate->setProperty("controlId", "phoneGenerate");
     auto *close = action(text("完成"), "textButton");
-    footer(ui.body, generate, close);
+    auto *connectOther = action(text("扫描/粘贴对方配对码"), "textButton");
+    connectOther->setProperty("controlId", "pairConnectOther");
+    footer(ui.body, generate, close, connectOther);
     connect(close, &QPushButton::clicked, &dialog, &QDialog::reject);
+    connect(connectOther, &QPushButton::clicked, &dialog, [&] { dialog.accept(); connection(); });
+    connect(copyLink, &QPushButton::clicked, &dialog, [&] { if (!pairingUrl.isEmpty()) QApplication::clipboard()->setText(pairingUrl); });
+    connect(copyImage, &QPushButton::clicked, &dialog, [&] { if (!pairingImage.isNull()) QApplication::clipboard()->setImage(pairingImage); });
+    connect(saveImage, &QPushButton::clicked, &dialog, [&] {
+        if (pairingImage.isNull()) return;
+        const auto path = QFileDialog::getSaveFileName(&dialog, text("保存设备配对码"), text("顺手排设备配对.png"), "PNG (*.png)");
+        if (path.isEmpty()) return;
+        if (!pairingImage.save(path, "PNG")) message(notice, text("图片保存失败，请换一个可写的位置。"), true);
+        else message(notice, text("图片已保存。配对码过期后，需要重新生成图片。"));
+    });
     QDateTime expiry;
     QTimer timer;
     timer.setInterval(1000);
     connect(&timer, &QTimer::timeout, &dialog, [&] {
         if (!expiry.isValid()) return;
         const auto seconds = QDateTime::currentDateTimeUtc().secsTo(expiry);
-        if (seconds <= 0) { image.clear(); image.setText(text("登录码已过期，请重新生成。")); expiry = {}; }
+        if (seconds <= 0) { image.clear(); image.setText(text("正在更新配对码…")); expiry = {}; if (!api.busy()) generate->click(); }
         else message(notice, text("剩余 ") + QString::number(seconds) + text(" 秒 · 仅限本人扫码 · 使用一次即失效，请勿转发。"));
     });
     connect(&address, &QComboBox::currentTextChanged, &dialog, [&] {
-        image.clear(); image.setText(text("生成登录码后，在手机上扫描")); expiry = {};
+        image.clear(); image.setText(text("点击刷新，生成这个地址的配对码")); expiry = {};
+        pairingUrl.clear(); pairingImage = {}; copyLink->setEnabled(false); copyImage->setEnabled(false); saveImage->setEnabled(false);
     });
     connect(generate, &QPushButton::clicked, &dialog, [&] {
         QUrl target;
@@ -830,42 +982,84 @@ void MainWindow::phone() {
             for (int y = 0; y < qr.getSize(); ++y) for (int x = 0; x < qr.getSize(); ++x)
                 if (qr.getModule(x, y)) painter.drawRect((x + border) * scale, (y + border) * scale, scale, scale);
             painter.end();
+            pairingUrl = QString::fromUtf8(value); pairingImage = bitmap;
+            copyLink->setEnabled(true); copyImage->setEnabled(true); saveImage->setEnabled(true);
             image.setPixmap(QPixmap::fromImage(bitmap).scaled(250, 250, Qt::KeepAspectRatio, Qt::FastTransformation));
             if (auto *scroll = dialog.findChild<QScrollArea *>("dialogScroll")) scroll->ensureWidgetVisible(&image, 8, 8);
             expiry = QDateTime::fromString(result.data.value("expires_at").toString(), Qt::ISODate);
-            if (result.data.value("pairing_limited").toBool())
-                information(&dialog, text("云端临时授权"), text("本次手机登录授权有效至 ") + result.data.value("session_expires_at").toString() + text("。到期后重新扫码或使用密码登录。"));
-            message(notice, text("登录码已生成。请在 90 秒内扫描，仅限本人使用。"));
+            message(notice, text("在手机上扫描即可配对。首次连接会合并两端日程，不会删除已有安排。"));
         } catch (const std::exception &) { image.clear(); message(notice, text("二维码无法生成，请缩短服务地址后重试。"), true); }
     });
     timer.start();
+    QTimer::singleShot(0, &dialog, [&] { QUrl target; if (usableOrigin(address.currentText(), target, true)) generate->click(); });
     dialog.exec();
     image.clear();
 }
 
 void MainWindow::connection() {
+    if (owner().isEmpty()) { initialize(); if (owner().isEmpty()) return; }
+    const auto info = api.call("GET", "/api/connection-info");
     QDialog dialog(this);
-    auto ui = prepare(dialog, "serviceDialog", text("连接日程服务"), text("电脑与手机访问同一服务，才能共享账号和日程。"), 570);
-    QLineEdit address(api.origin);
+    auto ui = prepare(dialog, "serviceDialog", text("扫描或粘贴对方配对码"), text("连接任意手机或电脑后会合并全部日程；修改也可能经对方传播到其他已配对设备。解除配对不会撤回副本。"), 650);
+    PairingAddressInput address;
     address.setObjectName("serviceAddress");
-    address.setPlaceholderText("http://192.168.1.20:43127");
+    address.setPlaceholderText("http://192.168.1.20:43127/#pair=…");
     address.setClearButtonEnabled(true);
-    field(ui.body, text("服务地址"), &address, text("安装版已自动启动本地服务，也可连接你已部署的 HTTPS 服务。"));
+    field(ui.body, text("对方的完整配对链接"), &address);
+    auto *imageActions = new QHBoxLayout;
+    auto *paste = action(text("粘贴链接/图片"), "textButton");
+    auto *openImage = action(text("选择二维码图片"), "textButton");
+    paste->setProperty("controlId", "peerPaste"); openImage->setProperty("controlId", "peerOpenImage");
+    imageActions->addWidget(paste); imageActions->addWidget(openImage); imageActions->addStretch();
+    ui.body->addLayout(imageActions);
+    QComboBox localAddress(&dialog);
+    localAddress.setObjectName("peerLocalAddress"); localAddress.setEditable(true); installModernComboBox(&localAddress);
+    for (const auto &candidate : info.data.value("candidates").toArray()) localAddress.addItem(candidate.toString());
+    if (localAddress.count() > 1) field(ui.body, text("对方可访问的本机地址"), &localAddress, text("通常保持默认即可；多张网卡时选择与对方同一局域网的地址。"));
+    else localAddress.hide();
     auto *notice = messageArea(ui.body);
-    auto *save = action(text("连接服务"), "primary");
+    message(notice, text("二维码图片在本机识别，不会上传。"));
+    auto useImage = [&](const QImage &image) {
+        QString error;
+        if (!address.loadQrImage(image, &error)) { message(notice, error, true); return; }
+        message(notice, text("已识别配对码，点击“配对并合并”即可连接。"));
+    };
+    connect(paste, &QPushButton::clicked, &dialog, [&] {
+        auto *clipboard = QApplication::clipboard();
+        const auto image = clipboard->image();
+        if (!image.isNull()) useImage(image);
+        else {
+            const auto value = clipboard->text().trimmed();
+            if (value.isEmpty()) { message(notice, text("剪贴板里没有链接或图片，请先复制对方的配对码。"), true); return; }
+            address.setText(value); address.setCursorPosition(0); message(notice, text("已粘贴。请使用对方当前显示的完整配对链接。"));
+        }
+    });
+    connect(openImage, &QPushButton::clicked, &dialog, [&] {
+        const auto path = QFileDialog::getOpenFileName(&dialog, text("选择对方的二维码图片"), {}, text("图片 (*.png *.jpg *.jpeg *.bmp);;所有文件 (*)"));
+        if (path.isEmpty()) return;
+        QString error;
+        if (!address.loadQrFile(path, &error)) { message(notice, error, true); return; }
+        message(notice, text("已识别配对码，点击“配对并合并”即可连接。"));
+    });
+    auto *save = action(text("配对并合并"), "primary");
     save->setProperty("controlId", "serviceConnect");
     save->setDefault(true);
     auto *cancel = action(text("取消"), "textButton");
     footer(ui.body, save, cancel);
     connect(cancel, &QPushButton::clicked, &dialog, &QDialog::reject);
     connect(save, &QPushButton::clicked, &dialog, [&] {
-        QUrl value;
-        if (!usableOrigin(address.text(), value)) { message(notice, text("请填写不含账号、路径或参数的 HTTP(S) 服务根地址。"), true); return; }
-        if (value.toString() != api.origin && !confirm(&dialog, text("切换到另一个服务？"), text("每个服务的账号分别保留。连接后会自动恢复该服务的登录与日程。"), text("切换并连接"))) return;
-        api.reset(value.toString());
-        setSession({});
-        settings.setValue("service_origin", api.origin);
+        shunshoupai::Connection parsed;
+        try { parsed = shunshoupai::parseConnection(address.text().toStdString(), true); }
+        catch (const std::invalid_argument &) { message(notice, text("请粘贴对方显示的完整设备配对链接。"), true); return; }
+        if (parsed.pairingToken.empty()) { message(notice, text("链接缺少配对码，单填设备地址不能配对。"), true); return; }
+        QJsonObject payload{{"url", QString::fromStdString(parsed.origin + "#pair=" + parsed.pairingToken)}};
+        QUrl ownAddress;
+        if (usableOrigin(localAddress.currentText(), ownAddress)) payload.insert("local_origin", ownAddress.toString());
+        const auto result = api.call("POST", "/api/peers/connect", payload);
+        if (!result.ok()) { message(notice, result.error, true); return; }
+        address.clear();
+        status->setText(text("已开始配对，连接后会自动合并日程。"));
         dialog.accept();
     });
-    if (dialog.exec() == QDialog::Accepted) initialize();
+    if (dialog.exec() == QDialog::Accepted) { if (!QApplication::activeModalWidget()) devices(); refresh(); }
 }

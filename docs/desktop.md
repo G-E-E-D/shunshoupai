@@ -1,63 +1,61 @@
-# Windows 原生桌面端
+# Windows 原生桌面端（v2.0.0）
 
-桌面界面由 C++17 / Qt 6 Widgets 编写，通过 Qt Network 调用共用服务 API，没有嵌入浏览器或 Qt WebEngine。安卓恢复独立的纯 Java 工程，连接同一服务。
+桌面使用 C++17 / Qt 6 Widgets 和 Qt Network，不嵌入浏览器。安装后打开即可使用本机日程，无需注册、登录或维持账号会话。
 
-v1.3.0 参考 Google 日历的蓝白配色和留白，重新设计主界面、登录/注册、设置及草稿弹窗；日期选择器使用圆形日期与清晰月份导航，支持鼠标、方向键、回车和 Escape 取消。窄窗口下状态标签保持单行，邮箱省略显示并可悬停查看完整内容。
+[Windows 安装器](https://github.com/G-E-E-D/shunshoupai/releases/download/v2.0.0/shunshoupai-desktop-v2.0.0-setup.exe) · [发布页](https://github.com/G-E-E-D/shunshoupai/releases/tag/v2.0.0)
 
 ## 安装与数据
 
-从 [v1.4.0 发布页](https://github.com/G-E-E-D/shunshoupai/releases/tag/v1.4.0)下载 `shunshoupai-desktop-v1.4.0-setup.exe`，双击安装。安装器为当前用户安装，不要求管理员权限，包含 Qt 动态库、Node.js 和应用后端。运行“顺手排”即可自动启动本地服务。
+安装器为当前 Windows 用户安装，包含 Qt 动态库、Node.js 和 SQLite 后端。启动时自动生成本机授权并启动服务；授权不根据 Host、Origin 或客户端名称放行。桌面访问 `127.0.0.1:43127`，手机通过可信局域网访问电脑。退出桌面会结束由本次应用启动的服务；手机仍可独立使用。
 
-本地服务监听 43127，桌面使用 127.0.0.1，安卓使用电脑局域网 IP。端口占用时明确报错，不会连接到来源未知的进程。退出桌面应用会结束本次启动的后端；已有其他服务不受影响。
+数据库位于 `%LOCALAPPDATA%/Shunshoupai/data/app.sqlite`，模型加密主密钥为同目录的 `model-encryption.key`。备份应先关闭服务或使用一致性备份，并保留数据库和密钥文件；未提交草稿保存在当前 Windows 用户的应用设置中，完整备份也应保留这些设置。升级、重装和卸载保留电脑用户数据，手工删除数据则不会保留。
 
-数据位于 `%LOCALAPPDATA%/Shunshoupai/data/app.sqlite`，个人模型加密主密钥位于同目录 `model-encryption.key`。备份需保留两者。重装、升级和卸载保留用户数据；手工清理数据意味着删除账号与日程，请自行备份。
+Windows 设备授权 Cookie 使用当前系统用户的 DPAPI 加密。它是本机或显式配对设备的访问凭据，不是邮箱密码登录。网络错误不会清除草稿或配对资料；本机服务可用后恢复工作。
 
-当前源码的 Windows 桌面 Cookie 使用 DPAPI 按当前系统用户加密，按服务地址（含端口）隔离，重新打开自动恢复登录；主动退出即清除本机凭据，网络失败时保留登录并自动重连。密码和模型 Key 不写入桌面设置。本地会话 30 天有效，活跃时每日续期。对结果未知的保存会按账号和服务记录原编号及草稿，以便恢复时确认而不重复写入。
+首次升级时，旧有效本机会话或唯一旧资料会沿用原空间；存在多份旧资料时，仅在本机选择继续使用的一份，其余数据不删除。选择也包含只有客户端草稿的旧资料。事件 ID、版本、原保存编号和草稿键保持兼容。旧 Supabase 数据不能直接作为本机 SQLite 使用，见[迁移边界](cloud-setup.md)。
 
-从旧源码版迁移时，可先通过“服务设置”连接原后端，继续使用原数据。若改为安装器自带服务，关闭两个服务后，将原 SQLite 数据库及同目录 `model-encryption.key` 一同备份并迁移到上述数据目录；不要覆盖已有数据，也不要只复制数据库而丢失加密主密钥。
+## 日常操作
 
-当前 Windows 安装器没有商业代码签名证书；下载后可将文件 SHA-256 与 Release 的校验文件比较。
+输入一段安排，点击“整理日程”或按 Ctrl+Enter，核对草稿后保存。草稿表格及手动编辑内容会自动保留；“暂不保存”不会提交到正式日程，明确放弃才删除草稿。保存结果未知时，通过恢复入口核实原请求，避免重复创建。
 
-## 使用
+右侧支持当天、七天、已完成筛选、搜索、编辑、完成/恢复和删除，采用上海时区。另一端修改同一条日程时，保留本地编辑稿，展示冲突后再明确选择。模型配置方法见[模型设置](model-settings.md)。
 
-注册后输入一段安排，点击“帮我整理一下”。草稿表格可以修改标题和起止时间，移除某项或暂不保存；确认后保存正式日程。右侧支持当天/七天、已完成筛选、搜索、手工添加、修改、完成/恢复和删除，时间使用上海时区。
+点击“配对设备”展示或复制二维码和链接，也可识别二维码图片、粘贴图片或另一台设备的配对链接；桌面不含相机实时扫码。支持电脑↔电脑、电脑↔安卓及多设备连接，配对码 90 秒有效且只能使用一次。确认前会说明：本机全部日程及未来修改可能经对方继续传播至其他已配设备，模型密钥不传播。设备列表可解除连接，已传播的日程副本不能撤回。
 
-“模型设置”填写兼容 Chat Completions 的 Base URL、模型名、API Key。测试连接会实际发出一个小请求，测试成功后仍需保存。提示词固定在服务端，跨端共享个人配置；界面不读回原始 Key。
+设备地址变化后需重新生成二维码，通过新码核对原设备并继续同步，不向新地址发送旧凭据。安卓接收同步时需保持前台。身份签名不等于 TLS；当前同步仅面向可信局域网，不提供端到端加密。
 
-“手机登录”选择电脑局域网 IP，生成一次性登录码。手机安装当前源码构建的安卓客户端，点击“连接电脑”进入扫码连接。登录码 90 秒有效且只能使用一次；扫描后自动连接并登录当前电脑账号，请勿转发给他人。关联和同步时手机与电脑需处于同一可信局域网并允许端口 43127；断开后手机继续本地使用，电脑恢复在线后自动合并。
+## 源码构建与本机授权
 
-若已有公网服务，可从“服务设置”连接其 HTTPS 根地址。各服务的凭据独立保存。连接另一个服务不会搬迁原服务的数据。
-
-## 源码构建
-
-安装 Qt 6.8+ Widgets / Network、CMake 3.21+ 和支持 C++17 的编译器。Windows CI 使用 Qt 6.8.3、MSVC 2022 x64；本地也支持匹配的 Qt MinGW 套件。设好 Qt 的 CMAKE_PREFIX_PATH 后：
+需要 Node.js 24、Qt 6.8+ Widgets/Network、CMake 3.21+ 和支持 C++20 的编译器。主应用使用 C++17，ZXing 二维码桥需要 C++20。设好 Qt 的 `CMAKE_PREFIX_PATH` 后：
 
 ```sh
+npm ci
 cmake -S desktop -B desktop/build
 cmake --build desktop/build --config Release
 ctest --test-dir desktop/build -C Release --output-on-failure
 ```
 
-源码调试先启动 Node 后端，然后使用：
+源码开发需生成至少 32 字符的随机 `APP_DEVICE_BOOTSTRAP_KEY`，将**同一个值**只传给本机 Node 进程和 Qt `--backend` 进程。下面在项目根目录的同一 PowerShell 会话中启动两者；可执行文件路径以 MSVC Release 构建为例：
 
-```sh
-Shunshoupai.exe --backend http://127.0.0.1:3000
+```powershell
+$env:APP_STORAGE = 'local'
+$env:APP_DEVICE_BOOTSTRAP_KEY = node -e "process.stdout.write(require('node:crypto').randomBytes(32).toString('base64url'))"
+$devServer = Start-Process -FilePath (Get-Command node).Source -ArgumentList @('node_modules/next/dist/bin/next', 'dev', '--hostname', '0.0.0.0', '--port', '3000') -WindowStyle Hidden -PassThru
+.\desktop\build\Release\Shunshoupai.exe --backend http://127.0.0.1:3000
 ```
 
-默认不带参数的启动需要安装布局：主程序旁有 `runtime/node.exe` 和 `resources/backend/server.js`。仓库不保存这类构建产物。
+Qt 仅向指定的 **IP 字面量环回地址**发送此密钥，例如 `127.0.0.1` 或 `::1`；不要用 `localhost`、局域网地址或公网地址代替此开发入口。不要把密钥写进 URL、命令行参数、浏览器或仓库。这个源码 Node 进程由开发者自行管理，Qt `--backend` 不会代为停止它。
 
-## 生成安装器
+安装版自动生成并传递授权密钥，不需要上述环境配置。默认不带 `--backend` 的启动依赖安装布局：主程序旁有 `runtime/node.exe` 和 `resources/backend/server.js`。
 
-需要 Node.js 24、Qt 的 windeployqt、NSIS 3.11 和 PowerShell 7。根目录执行 `npm ci`、`npm run build` 生成 standalone 后端，再构建桌面 Release，执行：
+## 生成安装器与验证
+
+还需 Qt 的 `windeployqt`、NSIS 3.11 和 PowerShell 7。运行 `npm run build`、构建桌面 Release 后执行：
 
 ```powershell
 ./desktop/scripts/package.ps1
 ```
 
-产物在忽略的 `desktop/dist/` 中。打包脚本复制 Qt 动态库、对应 Node 运行时、后端和许可证，生成安装器及 SHA256SUMS。CI 使用与此相同的 [工作流](../.github/workflows/desktop.yml)。
+产物在忽略目录 `desktop/dist/`，包含安装器和 SHA256SUMS；工作流见 [desktop.yml](../.github/workflows/desktop.yml)。Windows 安装器未使用商业代码签名证书，可核对 Release 校验文件。
 
-## 验证范围
-
-原生烟测通过独立数据库注册虚构账号，调用真实解析、保存、防重、修改、模型元数据、扫码兑换及同账号查询，并渲染原生 QWidget 截图。安装器验收还验证随包 Node/Qt、默认服务启动/退出、重装和卸载保留数据。具体完成状态见 [验收记录](acceptance.md)。
-
-真实手机相机、真实模型账号、托管 Supabase 和公网网络仍需要各自外部环境验证。
+测试覆盖本机自动授权、设备隔离与撤销、日程保存防重、草稿恢复和原生界面。安装器还需检查随包运行库、升级及数据保留。具体结果以[验收记录](acceptance.md)为准；不将模拟器或受控模型测试视为实体相机、真实模型或公网验收。

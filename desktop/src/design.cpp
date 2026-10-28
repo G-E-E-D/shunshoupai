@@ -33,6 +33,9 @@ QIcon Design::icon(const QString &name, const QColor &color) {
         for (int i = 0; i < 3; ++i) { p.drawLine(QPointF(4, 6 + 6 * i), QPointF(20, 6 + 6 * i)); p.setBrush(Qt::white); p.drawEllipse(QPointF(i == 1 ? 9 : 15, 6 + 6 * i), 2, 2); }
     } else if (name == "person") {
         p.drawEllipse(QRectF(8, 3, 8, 8)); p.drawArc(QRectF(4, 13, 16, 14), 0, 180 * 16);
+    } else if (name == "desktop") {
+        p.drawRoundedRect(QRectF(3, 4, 18, 13), 2, 2);
+        p.drawLine(QPointF(12, 17), QPointF(12, 21)); p.drawLine(QPointF(8, 21), QPointF(16, 21));
     } else if (name == "qr") {
         for (const QPointF at : {QPointF(3, 3), QPointF(14, 3), QPointF(3, 14)}) { p.drawRoundedRect(QRectF(at, QSizeF(7, 7)), 1, 1); p.drawPoint(at + QPointF(3.5, 3.5)); }
         p.drawLine(QPointF(15, 15), QPointF(20, 15)); p.drawLine(QPointF(15, 15), QPointF(15, 20)); p.drawPoint(QPointF(20, 20));

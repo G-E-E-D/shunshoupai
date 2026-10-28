@@ -8,6 +8,7 @@ export interface EventDraft {
   assumptions: string[];
 }
 export interface ScheduleEvent {
+  replica_conflicts?: Pick<import("./replica").ReplicaHead, "revision_id" | "author" | "changed_at" | "payload">[];
   id: string;
   title: string;
   start_at: string;
@@ -32,6 +33,13 @@ export interface SessionInfo {
   ai_provider: "model" | "rules";
   pairing_limited?: boolean;
   session_expires_at?: string | null;
+  local_first?: boolean;
+  role?: "owner" | "peer";
+  space_id?: string;
+  peer_id?: string;
+  device?: { id: string; name: string };
+  peer?: { id: string; name: string; platform: string };
+  legacy_space_ids?: string[];
 }
 export interface ModelSettingsInfo {
   configured: boolean;

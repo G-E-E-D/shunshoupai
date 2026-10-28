@@ -51,13 +51,13 @@ final class OfflineScheduleView extends LinearLayout {
         drafts=context.getSharedPreferences("offline-editor",Context.MODE_PRIVATE);
         setOrientation(VERTICAL);setPadding(dp(18),dp(16),dp(18),dp(8));setBackgroundColor(Color.rgb(248,250,253));
         TextView title=text("顺手排",26,true);addView(title);
-        identity=text("手机日程 · 无需登录即可使用",12,false);addView(identity);
-        status=text("日程保存在手机，连接电脑后自动合并",12,false);status.setAccessibilityLiveRegion(View.ACCESSIBILITY_LIVE_REGION_POLITE);addView(status);
+        identity=text("本机日程 · 打开就能用",12,false);addView(identity);
+        status=text("日程保存在本机，已配对设备可达后自动合并",12,false);status.setAccessibilityLiveRegion(View.ACCESSIBILITY_LIVE_REGION_POLITE);addView(status);
         LinearLayout actions=row();
         addButton=button("＋ 新日程",()->edit(null));addButton.setId(R.id.offline_add);actions.addView(addButton,weighted());
         addButton.setBackgroundResource(R.drawable.button_background);addButton.setTextColor(Color.WHITE);
-        Button intelligent=button("智能整理",online);intelligent.setId(R.id.offline_online);actions.addView(intelligent,weighted());
-        Button connection=button("连接电脑",connect);connection.setId(R.id.offline_connect);actions.addView(connection,weighted());addView(actions);
+        Button intelligent=button("电脑工具",online);intelligent.setId(R.id.offline_online);actions.addView(intelligent,weighted());
+        Button connection=button("设备与同步",connect);connection.setId(R.id.offline_connect);actions.addView(connection,weighted());addView(actions);
         LinearLayout dates=row();dates.addView(button("‹",()->{selected=selected.minusDays(1);refresh();}));
         date=button("",()->new DatePickerDialog(context,(v,y,m,d)->{selected=LocalDate.of(y,m+1,d);refresh();},selected.getYear(),selected.getMonthValue()-1,selected.getDayOfMonth()).show());
         dates.addView(date,weighted());dates.addView(button("›",()->{selected=selected.plusDays(1);refresh();}));dates.addView(button("今天",()->{selected=LocalDate.now(LocalScheduleStore.ZONE);refresh();}));addView(dates);
@@ -74,12 +74,13 @@ final class OfflineScheduleView extends LinearLayout {
     void restoreEditor(String id){if(id==null)return;try{if("new".equals(id))edit(null);else for(JSONObject event:store.list(scope))if(id.equals(event.getString("id"))){edit(event);break;}}catch(Exception error){showError();}}
     void destroy(){if(activeEditor!=null)activeEditor.dismiss();}
     private String draftKey(String draftScope,String id){return draftScope+"|"+id;}
-    private String readDraft(String id){String saved=drafts.getString(draftKey(scope,id),null);if(saved==null&&scope.equals(store.canonicalScope(LocalScheduleStore.GUEST)))saved=drafts.getString(draftKey(LocalScheduleStore.GUEST,id),null);return saved;}
+    private String readDraft(String id){for(String candidate:store.draftScopes(scope)){String saved=drafts.getString(draftKey(candidate,id),null);if(saved!=null)return saved;}return null;}
 
     void refresh() {
         if(list==null)return;
         addButton.setText(readDraft("new")==null?"＋ 新日程":"继续草稿");
-        identity.setText(store.accountLabel(scope));
+        identity.setText(store.isPrimary(scope)?"本机主日程 · 打开就能用":"旧资料 · 独立保留，仅供查看");
+        addButton.setEnabled(store.isPrimary(scope));
         date.setText(selected.format(DateTimeFormatter.ofPattern("M月d日 E",java.util.Locale.CHINA)));
         int scrollY=scroll.getScrollY();
         try {
@@ -87,25 +88,25 @@ final class OfflineScheduleView extends LinearLayout {
             String fingerprint=scope+"|"+selected+"|"+query+"|"+events.toString();
             if(fingerprint.equals(rendered))return;
             rendered=fingerprint;list.removeAllViews();
-            for(JSONObject event:events){if(event.optBoolean("dirty"))pending++;if(event.has("conflict"))conflicts++;}
+            for(JSONObject event:events){if(event.optBoolean("dirty"))pending++;if(hasConflict(event))conflicts++;}
             if(conflicts>0){TextView notice=text(conflicts+" 项日程需要合并确认，手机修改已保留",13,true);notice.setTextColor(Color.rgb(160,78,0));list.addView(notice);}
-            else if(pending>0)list.addView(text(pending+" 项修改等待同步",12,false));
+            else if(pending>0){boolean paired=false;for(JSONObject peer:store.peers())if(peer.optBoolean("enabled"))paired=true;list.addView(text(pending+(paired&&store.isPrimary(scope)?" 项修改等待同步":" 项修改已保存在本机"),12,false));}
             for(JSONObject event:events) {
-                boolean conflict=event.has("conflict");
+                boolean conflict=hasConflict(event);
                 if(event.optBoolean("deleted")&&!conflict)continue;
                 String start=event.getString("start_local"),end=event.getString("end_local");
                 if(!query.isEmpty()){if(!event.getString("title").toLowerCase(java.util.Locale.ROOT).contains(query))continue;}
                 else if(!conflict && !(start.compareTo(selected.plusDays(1).atStartOfDay().format(LocalScheduleStore.LOCAL))<0 && end.compareTo(selected.atStartOfDay().format(LocalScheduleStore.LOCAL))>0))continue;
                 shown++;LinearLayout card=new LinearLayout(getContext());card.setOrientation(VERTICAL);card.setPadding(dp(10),dp(8),dp(10),dp(8));card.setBackgroundResource(R.drawable.panel_background);
                 LayoutParams margins=new LayoutParams(LayoutParams.MATCH_PARENT,LayoutParams.WRAP_CONTENT);margins.topMargin=dp(10);list.addView(card,margins);
-                LinearLayout heading=row();CheckBox done=new CheckBox(getContext());done.setChecked("completed".equals(event.getString("status")));done.setContentDescription("完成日程："+event.getString("title"));done.setEnabled(!event.optBoolean("deleted"));
+                LinearLayout heading=row();CheckBox done=new CheckBox(getContext());done.setChecked("completed".equals(event.getString("status")));done.setContentDescription("完成日程："+event.getString("title"));done.setEnabled(store.isPrimary(scope)&&!conflict&&!event.optBoolean("deleted"));
                 done.setOnCheckedChangeListener((view,checked)->{try{JSONObject wanted=LocalScheduleStore.desired(event);wanted.put("status",checked?"completed":"planned");store.save(scope,event.getString("id"),wanted,event.getInt("base_version"));refresh();changed.run();}catch(Exception error){showError();}});
                 heading.addView(done);TextView label=text(event.getString("title")+(event.optBoolean("deleted")?"（手机已删除）":""),17,true);heading.addView(label,weighted());card.addView(heading);
                 card.addView(text(start.substring(5,10)+" "+start.substring(11,16)+" — "+(start.substring(0,10).equals(end.substring(0,10))?"":end.substring(5,10)+" ")+end.substring(11,16),14,false));
                 if(overlaps(event,events)) {TextView warning=text("时间重叠",12,false);warning.setTextColor(Color.rgb(160,78,0));card.addView(warning);}
                 LinearLayout buttons=row();buttons.addView(button(conflict?"处理合并":"编辑",()->{if(conflict)resolve(event);else edit(event);}),weighted());
                 if(!conflict)buttons.addView(button("删除",()->new AlertDialog.Builder(getContext()).setTitle("删除这项日程？").setMessage(event.optString("title")).setNegativeButton("取消",null).setPositiveButton("删除",(dialog,which)->{try{JSONObject wanted=LocalScheduleStore.desired(event);wanted.put("deleted",true);store.save(scope,event.getString("id"),wanted,event.getInt("base_version"));refresh();changed.run();}catch(Exception error){showError();}}).show()),weighted());
-                card.addView(buttons);
+                if(store.isPrimary(scope))card.addView(buttons);
             }
             if(shown==0){TextView empty=text(query.isEmpty()?"这一天还没有安排\n点击「新日程」记下来，没联网也能用。":"没有找到相关日程",16,false);empty.setGravity(Gravity.CENTER);empty.setPadding(0,dp(48),0,0);list.addView(empty);}
             scroll.post(()->scroll.scrollTo(0,scrollY));
@@ -119,12 +120,24 @@ final class OfflineScheduleView extends LinearLayout {
         return false;
     }
 
+    private boolean hasConflict(JSONObject event) {return event.has("conflict") || (event.optJSONArray("replica_conflicts")!=null&&event.optJSONArray("replica_conflicts").length()>1);}
     private void resolve(JSONObject event) {
-        new AlertDialog.Builder(getContext()).setTitle("两端的修改都已保留")
-            .setMessage(event.optString("conflict_message")+"\n\n手机："+event.optString("title")+"\n"+event.optString("start_local").replace('T',' ')+" — "+event.optString("end_local").replace('T',' ')+"\n"+stateLabel(event.optString("status"),event.optBoolean("deleted"))+"\n\n电脑："+remoteSummary(event.optJSONObject("conflict")))
-            .setNegativeButton("稍后",null)
-            .setNeutralButton(event.optBoolean("deleted")?"仍然删除":"保留手机为副本",(d,w)->{try{store.resolve(scope,event,true);refresh();changed.run();}catch(Exception error){showError();}})
-            .setPositiveButton("使用电脑版本",(d,w)->{try{store.resolve(scope,event,false);refresh();changed.run();}catch(Exception error){showError();}}).show();
+        org.json.JSONArray choices=event.optJSONArray("replica_conflicts");
+        if(choices==null || choices.length()<2) return;
+        String[] labels=new String[choices.length()];
+        try {
+            for(int i=0;i<choices.length();i++) {
+                JSONObject head=choices.getJSONObject(i),value=head.getJSONObject("payload");
+                labels[i]=value.getString("title")+"\n"+value.getString("start_local").replace('T',' ')+" — "+value.getString("end_local").replace('T',' ')+"\n"+stateLabel(value.getString("status"),value.getBoolean("deleted"))+" · "+head.optString("author","设备");
+            }
+            final int[] selected={-1};AlertDialog dialog=new AlertDialog.Builder(getContext()).setTitle("不同修改都已保留 · 选择保留版本")
+                .setSingleChoiceItems(labels,-1,(d,which)->selected[0]=which).setNegativeButton("稍后",null).setPositiveButton("确认合并",null).create();
+            dialog.setOnShowListener(ignored->dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener(v->{
+                if(selected[0]<0){Toast.makeText(getContext(),"先选择要保留的版本",Toast.LENGTH_SHORT).show();return;}
+                try{store.replica().resolve(scope,event.getString("id"),choices.getJSONObject(selected[0]).getJSONObject("payload"),event.getInt("version"));dialog.dismiss();refresh();changed.run();}
+                catch(Exception error){dialog.dismiss();refresh();Toast.makeText(getContext(),"日程又有新修改，请重新查看后选择。所有版本仍保留。",Toast.LENGTH_LONG).show();}
+            }));dialog.show();
+        }catch(Exception error){showError();}
     }
 
     private String stateLabel(String value,boolean deleted){return deleted?"已删除":"completed".equals(value)?"已完成":"未完成";}
@@ -134,6 +147,7 @@ final class OfflineScheduleView extends LinearLayout {
     }
 
     private void edit(JSONObject existing) {
+        if(!store.isPrimary(scope))return;
         if(activeEditor!=null&&activeEditor.isShowing())return;
         String editingScope=scope;
         try {
@@ -152,7 +166,7 @@ final class OfflineScheduleView extends LinearLayout {
             Button start=button("",()->{}),end=button("",()->{});Runnable labels=()->{start.setText("开始  "+times[0].format(DateTimeFormatter.ofPattern("M月d日 HH:mm")));end.setText("结束  "+times[1].format(DateTimeFormatter.ofPattern("M月d日 HH:mm")));};labels.run();
             start.setOnClickListener(v->pick(times[0],value->{Duration duration=Duration.between(times[0],times[1]);times[0]=value;times[1]=value.plus(duration);labels.run();persist.run();}));
             end.setOnClickListener(v->pick(times[1],value->{times[1]=value;labels.run();persist.run();}));form.addView(start);form.addView(end);
-            form.addView(text("上海时间 · 保存后自动同步",12,false));
+            form.addView(text("上海时间 · 立即保存在本机",12,false));
             TextView error=text("",13,false);error.setTextColor(Color.rgb(179,38,30));form.addView(error);
             AlertDialog dialog=new AlertDialog.Builder(getContext()).setTitle(existing==null?"新日程":"编辑日程").setView(form).setNegativeButton("取消",null).setPositiveButton("保存",null).create();
             activeEditor=dialog;
@@ -162,7 +176,7 @@ final class OfflineScheduleView extends LinearLayout {
                 String value=title.getText().toString().trim();long duration=Duration.between(times[0],times[1]).toMinutes();
                 if(value.isEmpty()){title.setError("写下日程名称");title.requestFocus();return;}
                 if(duration<=0||duration>1440||times[0].getYear()<2000||times[1].getYear()>2100){error.setText("结束时间需晚于开始，单次不超过 24 小时，日期范围为 2000–2100 年。");return;}
-                try {store.save(editingScope,existing==null?null:existing.getString("id"),LocalScheduleStore.payload(value,times[0],times[1],existing==null?"planned":existing.getString("status"),false),baseVersion);SharedPreferences.Editor cleared=drafts.edit().remove(draftKey(editingScope,draftId)).remove(draftKey(store.canonicalScope(editingScope),draftId));if(store.canonicalScope(editingScope).equals(store.canonicalScope(LocalScheduleStore.GUEST)))cleared.remove(draftKey(LocalScheduleStore.GUEST,draftId));cleared.apply();selected=times[0].toLocalDate();refresh();changed.run();dialog.dismiss();}catch(Exception failure){error.setText("保存失败，请重试，内容仍在。");}
+                try {store.save(editingScope,existing==null?null:existing.getString("id"),LocalScheduleStore.payload(value,times[0],times[1],existing==null?"planned":existing.getString("status"),false),baseVersion);SharedPreferences.Editor cleared=drafts.edit();for(String candidate:store.draftScopes(editingScope))cleared.remove(draftKey(candidate,draftId));cleared.apply();selected=times[0].toLocalDate();refresh();changed.run();dialog.dismiss();}catch(Exception failure){error.setText(failure instanceof AncestryReplica.Invalid ? failure.getMessage()+"，草稿仍保留。" : "保存失败，请重试，内容仍在。");}
             }));dialog.show();title.requestFocus();
         } catch(Exception error){showError();}
     }

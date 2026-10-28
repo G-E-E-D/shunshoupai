@@ -1,5 +1,6 @@
 #pragma once
 #include "session_cookies.h"
+#include "device_bootstrap.h"
 #include <QEventLoop>
 #include <QJsonDocument>
 #include <QJsonObject>
@@ -20,10 +21,20 @@ class ApiClient {
     QNetworkAccessManager manager;
     bool working = false;
     bool rememberSession = false;
+    QByteArray bootstrapKey;
+    QString bootstrapOrigin;
 public:
     QString origin;
-    explicit ApiClient(QString base, bool remember = false) : rememberSession(remember), origin(std::move(base)) { reset(origin); }
+    explicit ApiClient(QString base, bool remember = false, QByteArray localBootstrapKey = {})
+        : rememberSession(remember), origin(std::move(base)) {
+        if (!localBootstrapKey.isEmpty() && isDeviceBootstrapOrigin(origin)) {
+            bootstrapKey = std::move(localBootstrapKey);
+            bootstrapOrigin = origin;
+        }
+        reset(origin);
+    }
     bool busy() const { return working; }
+    bool canBootstrap() const { return !bootstrapKey.isEmpty() && origin == bootstrapOrigin; }
     void reset(const QString &base) {
         origin = base;
         manager.setCookieJar(rememberSession ? new SessionCookieJar(origin, &manager) : new QNetworkCookieJar(&manager));
@@ -39,6 +50,8 @@ public:
         request.setHeader(QNetworkRequest::ContentTypeHeader, "application/json");
         request.setRawHeader("Origin", origin.toUtf8());
         request.setRawHeader("User-Agent", "ShunshoupaiQt/" SHUNSHOUPAI_VERSION);
+        if (canBootstrap() && method == "POST" && path == "/api/devices/bootstrap")
+            request.setRawHeader("X-Device-Bootstrap", bootstrapKey);
         request.setAttribute(QNetworkRequest::RedirectPolicyAttribute, QNetworkRequest::ManualRedirectPolicy);
         request.setTransferTimeout(35000);
         auto *reply = manager.sendCustomRequest(request, method.toUtf8(), method == "GET" ? QByteArray{} : QJsonDocument(body).toJson(QJsonDocument::Compact));

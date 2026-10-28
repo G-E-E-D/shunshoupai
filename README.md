@@ -1,87 +1,60 @@
-# 顺手排 · 把想法排进生活
+# 顺手排 · 打开即用的本地日程
 
-电脑端是 **C++ / Qt Widgets 原生应用**。安卓端使用纯 Java 原生日程首页，本机保存日程，无需连接电脑即可新增、修改、完成和删除；连接电脑后自动合并日程，WebView 保留智能整理和账号设置入口。两个客户端连接后使用同一账号和固定的日程提示词。
+v2.0.0 取消登录和注册。电脑与手机各自保存日程，通过同一局域网下的扫码配对同步，不依赖云端账号或统一的日程数据库。
 
-v1.4.0 包含保持登录、手机离线日程、恢复连接后自动合并、三端草稿恢复和更稳定的刷新。实现与验证范围见 [易用性改进](docs/usability.md)。
+[Windows 一键安装 EXE](https://github.com/G-E-E-D/shunshoupai/releases/download/v2.0.0/shunshoupai-desktop-v2.0.0-setup.exe) · [Android APK](https://github.com/G-E-E-D/shunshoupai/releases/download/v2.0.0/shunshoupai-android-v2.0.0.apk) · [发布页](https://github.com/G-E-E-D/shunshoupai/releases/tag/v2.0.0)
 
-[Windows 一键安装 EXE](https://github.com/G-E-E-D/shunshoupai/releases/download/v1.4.0/shunshoupai-desktop-v1.4.0-setup.exe) · [Android APK](https://github.com/G-E-E-D/shunshoupai/releases/download/v1.4.0/shunshoupai-android-v1.4.0.apk) · [发布页](https://github.com/G-E-E-D/shunshoupai/releases/tag/v1.4.0)
+## 日常使用
 
-![Qt 原生桌面实际渲染](https://github.com/G-E-E-D/shunshoupai/releases/download/v1.4.0/native-desktop.png)
+1. 安装后直接打开。电脑进入本机日程；手机无需连接电脑即可新增、编辑、完成、删除和搜索。
+2. 需要同步时，两台电脑或安卓手机连接同一可信 Wi-Fi。一端展示配对码，另一端扫码或粘贴配对链接，确认共享范围后合并日程。
+3. 之后连接可用时自动尝试同步。其他设备离线时继续本地保存；手机需保持应用在前台才能接收同步。
+4. 输入一句安排可生成可编辑草稿，确认后保存。“模型设置”可配置自己的兼容 Chat Completions 接口，没有模型时明确使用规则解析。
 
-## 安装后使用
+二维码 90 秒有效、只能用一次。配对会共享本机全部日程及未来修改，内容也可能经对方继续传到其已配对设备；模型密钥不会随日程传播。解除配对停止后续授权，无法撤回已传播的副本。仅连接同一 Wi-Fi 或知道设备地址，不会获得日程访问权限。
 
-手机安装后可直接使用“本机日程”，不必先完成下面的连接步骤。需要与电脑合并或使用智能整理时，再关联一次电脑账号。建议两端一起更新；旧服务没有同步接口时，本机内容仍保留。
+支持电脑↔电脑、电脑↔安卓、安卓↔安卓两两配对，可连接多台设备，无需固定中心电脑。安卓后台同步和可靠锁屏提醒尚未实现；手机的 Web 智能整理仍需要配对电脑在线。详细规则和边界见 [设备同步](docs/device-sync.md)。
 
-1. Windows 运行安装器，打开“顺手排”。安装包包含 Qt 运行库、Node.js 和本地服务，应用会自动启动服务，无需另装 Node。
-2. 点击“登录”，注册自己的账号。无预设账号，本地模式不发送验证邮件。
-3. 写下一段安排，点击“整理日程”；检查可编辑草稿，确认后才保存。
-4. “模型设置”中填写自己的 Base URL、模型名称和 API Key，测试连接后保存。日程提示词固定在服务端，用户不需要填写。
-5. 电脑点击“手机登录”，选择局域网地址并生成一次性登录码。安卓点击“连接电脑”后选择“扫码连接”，即可连接并登录同一账号，无需再次输入密码。
+![Qt 原生桌面](https://github.com/G-E-E-D/shunshoupai/releases/download/v2.0.0/native-desktop.png)
 
-手机日常使用无需电脑在线。首次关联和同步时，两台设备需能访问同一服务：本地模式连接同一 Wi-Fi，允许可信局域网访问端口 **43127**，电脑应用保持运行。关联后手机前台自动尝试同步，断线期间继续保存到本机。扫码登录码有效 **90 秒**、只能使用一次；它是临时登录凭据，请勿截图转发。地址二维码仍可用于仅连接、不登录。
+## 数据与升级
 
-Windows 数据保存在 `%LOCALAPPDATA%/Shunshoupai/data/`，升级和卸载保留用户数据。退出桌面应用会停止本次启动的本地服务。Windows 登录凭据使用当前用户的 DPAPI 加密保存在本机，启动自动恢复；主动退出会清除。默认本地会话 30 天有效，使用时每日续期，短暂断网不清除登录。
+Windows 数据位于 `%LOCALAPPDATA%/Shunshoupai/data/`，升级和卸载保留数据。关闭服务后备份完整数据目录，包括仍存在的 SQLite `-wal`/`-shm` 文件和 `model-encryption.key`；未提交草稿还需保留当前用户的应用设置。手机日程存于应用自己的 SQLite，配对凭据使用 Android Keystore 保护。
 
-## 功能与边界
+旧版单份资料沿用，多份旧资料先在本机选择；保留原日程编号、版本、草稿和模型设置。其他历史资料保留，明确导入后才进入本机主日程，不因配对而全部混合。设备换 IP 后重新扫描同一设备的新配对码，核对稳定身份后继续同步；不会向新地址发送旧凭据。建议所有设备一起升级，v1.x 登录协议与 v2 设备协议不同。
 
-| 能力 | 当前行为 |
+旧 Supabase 模式不作为 v2 的运行后端，已有云端数据保持原样，需要先导出再迁移。历史迁移与回归脚本保留在仓库中。
+
+## 技术与实现
+
+| 部分 | 当前行为 |
 | --- | --- |
-| 原生桌面 | C++17 / Qt 6 Widgets、Network；日程整理、草稿确认、日程增删改、完成/恢复、当天/七天、搜索 |
-| 安卓 | 纯 Java 原生日程首页与 SQLite 离线存储；扫码关联、日期时间选择、搜索、冲突处理；智能整理使用在线 WebView |
-| 个人模型 | 每账号保存兼容 Chat Completions 的 Base URL、模型名和 Key；Key 在服务端 AES-256-GCM 加密，仅读回掩码 |
-| 固定提示词 | `src/lib/parser.ts` 固定日程系统提示词，模型设置接口拒绝提示词覆盖 |
-| 扫码登录 | 高熵一次性码、90 秒有效、数据库原子兑换；二维码 fragment 携带，不含密码、长期会话或模型 Key |
-| 跨端同步 | 同服务同账号；手机前台自动重连、上传离线操作并分页拉取含删除记录的日程；重试不重复创建，同条目冲突保留手机修改 |
-| 保存保护 | 草稿确认、批量事务、防重编号、版本冲突和时间重叠检查；不确定结果保留原编号核实 |
-| 无模型体验 | 明确显示规则解析；不调用付费模型，也不把规则结果当 AI |
-| 时间与提醒 | 上海时区单次日程，2000–2100 年、最长 24 小时；提醒仅前台生效 |
+| 电脑 | C++17 / Qt 6 Widgets 原生界面，随包 Node.js 24 本机服务 |
+| 手机 | 纯 Java 原生日程、SQLite、本机草稿；在线智能整理使用受限 WebView |
+| 设备授权 | 本机启动能力密钥、一次性扫码、每设备可撤销凭据，无邮箱密码接口 |
+| 同步 | 每台设备保存主日程，不可变修订及完整祖先关系，分页交换、幂等合并及删除标记 |
+| 冲突 | 重叠日程保留；同一项并发修改或删除保留全部版本，由用户明确选择 |
+| 易用性 | 三端草稿恢复、时间选择、减少无变化重绘、手机日程优先 |
+| 模型 | 自带接口与密钥，AES-256-GCM 加密存储，固定提示词 |
 
-未提供 iOS、可靠后台/锁屏提醒、循环日程、自动空档排期、外部日历双向同步或已托管公网 Demo。离线可使用原生日程，智能整理和模型设置仍需连接服务。
-
-默认 SQLite 的手机登录是独立 30 天会话，活跃使用自动续期。可选 Supabase 模式的扫码授权只持续至源 access JWT 到期，到期重新扫码或密码登录；不会复制 refresh token。失效期间手机仍可离线使用。完整说明见 [模型与扫码](docs/model-settings.md)、[桌面安装与构建](docs/desktop.md)、[安卓说明](docs/android.md)、[验收记录](docs/acceptance.md)。
+入站授权存储令牌哈希；用于回连的出站凭据加密保存。Node 使用数据库旁 `model-encryption.key`，Windows 客户端使用 DPAPI，安卓使用 Keystore。设备公钥核对用于身份识别，不代表局域网 HTTP 已加密。请在自己信任的局域网配对和同步。
 
 ## 从源码运行
 
-仓库保存源码、配置、文档和必要的构建引导文件；`.exe`、`.apk`、构建目录、运行数据和截图只放在忽略目录、CI 附件或 Releases。
+先配置 Node.js 24、Qt 6.8+ Widgets/Network、CMake 3.21+ 与支持 C++20 的编译器。主应用保持 C++17，ZXing 二维码桥使用 C++20。源码开发的本机引导密钥需要在启动 Node 与 Qt 的同一受控进程环境中设置，长度至少 32 字符且随机；安装版自动处理这一步。
 
-后端需要 Node.js 24：
-
-```sh
+```powershell
+$env:APP_DEVICE_BOOTSTRAP_KEY = [Convert]::ToBase64String([Security.Cryptography.RandomNumberGenerator]::GetBytes(32))
 npm ci
 npm run build
 npm run start
+# 在继承相同环境的本机进程中启动编译后的 Qt：
+# Shunshoupai.exe --backend http://127.0.0.1:3000
 ```
 
-源码后端默认监听 3000。它提供 API 和安卓工作台；普通电脑浏览器不会打开桌面工作台。
+不要把引导密钥放进浏览器、二维码、日志或 Git；普通远程 `--backend` 地址不能自动得到本机授权。Android 使用 JDK 17+、SDK 36、Gradle Wrapper，无需 NDK。完整构建说明见 [桌面](docs/desktop.md) 与 [安卓](docs/android.md)。
 
-桌面需要 Qt 6.8+ Widgets/Network、CMake 3.21+、C++17 编译器：
-
-```sh
-cmake -S desktop -B desktop/build
-cmake --build desktop/build --config Release
-# Windows 示例；连接已启动的源码后端
-desktop/build/Release/Shunshoupai.exe --backend http://127.0.0.1:3000
-```
-
-Android 使用 JDK 17、Android SDK 36 和仓库内 Gradle Wrapper，不再需要 NDK / CMake。Windows 安装器由 NSIS 构建；完整步骤见平台文档。
-
-## 服务端配置
-
-复制 `.env.example` 为 `.env.local`，按需配置，不要提交密钥。
-
-| 变量 | 用途 |
-| --- | --- |
-| `APP_STORAGE` | 默认 local；可选 supabase |
-| `APP_DB_PATH` | SQLite 路径；默认源码模式 data/shunshoupai.sqlite |
-| `AI_API_KEY` / `AI_BASE_URL` / `AI_MODEL` | 可选服务端默认模型，个人配置优先 |
-| `MODEL_SETTINGS_ENCRYPTION_KEY` | 云端/多实例必须设置一致的 32 字节 Base64 主密钥；本地自动生成私有文件 |
-| `AI_ALLOWED_PRIVATE_HOSTS` | 管理员允许的本地模型主机；默认只允许公网 HTTPS |
-| `NEXT_PUBLIC_SUPABASE_URL` / `NEXT_PUBLIC_SUPABASE_ANON_KEY` | 可选 Supabase 地址和公开密钥 |
-| `APP_ORIGIN` / `COOKIE_SECURE` | 公网实际 HTTPS origin / true；本地局域网留空 / false |
-
-新 Supabase 部署按顺序执行全部 [迁移](supabase/migrations/)；已有部署追加个人模型、扫码配对和离线同步迁移。见 [云端配置](docs/cloud-setup.md)。SQLite 单实例需持久可写磁盘；多实例使用 Supabase 和一致的加密主密钥。
-
-## 检查与结构
+## 检查与发布
 
 ```sh
 npm run check
@@ -89,24 +62,8 @@ npm run test:e2e
 ctest --test-dir desktop/build -C Release --output-on-failure
 ```
 
-Windows CI 真实安装 EXE，验证随包 Node/Qt、原生控件渲染、真实 API、扫码登录、重装/卸载数据保留。Android CI 构建并签名 APK，安装到模拟器并运行纯 Java / WebView 联调与扫码白页恢复回归。测试使用虚构账号和隔离数据库，不调用付费模型。实际结果与外部环境边界见 [验收记录](docs/acceptance.md)。
+每轮更新按项目约定提交、推送，并在同一提交的服务、Windows 和 Android CI 验收通过后发布安装包。源码、配置和文档进入 Git，安装包与截图进入 Releases；密钥、运行数据和构建缓存不提交。
 
-```text
-desktop/        C++ / Qt 原生界面、NSIS、Windows 打包与验收
-shared/core/    桌面 C++ 连接协议及其测试
-android/        纯 Java 工程、相机、连接校验与 WebView
-src/app/api/    认证、日程、个人模型、一次性扫码登录
-src/components/ 安卓 WebView 中的日程界面
-src/lib/        规则/模型解析、SQLite / Supabase、保存保护
-supabase/       迁移及权限/事务测试
-tests/          服务、协议和安卓工作台集成测试
-docs/           运行、构建、教程和验收文档
-```
+[使用教程](docs/tutorial.md) · [设备协议与迁移](docs/device-sync.md) · [验收记录](docs/acceptance.md) · [模型设置](docs/model-settings.md)
 
-[使用教程](docs/tutorial.md) · [创作说明](docs/creation-note.md) · [演示脚本](docs/demo-script.md) · [原始技术方案](AI日程应用可行性与技术方案.md)
-
-## 开源协议
-
-本项目原创代码采用 [MIT License](LICENSE)，Copyright (c) 2026 G-E-E-D。
-
-第三方组件继续遵循各自的许可证。第三方组件许可证和 Qt 动态链接/重新构建说明见 [desktop/THIRD_PARTY_NOTICES.md](desktop/THIRD_PARTY_NOTICES.md)。
+原创代码采用 [MIT License](LICENSE)，Copyright (c) 2026 G-E-E-D。第三方许可与 Qt 动态链接说明见 [第三方声明](desktop/THIRD_PARTY_NOTICES.md)。

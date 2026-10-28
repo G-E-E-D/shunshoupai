@@ -1,4 +1,4 @@
-import { requireAuth } from "@/lib/server/auth";
+import { assertAuthActive, requireAuth } from "@/lib/server/auth";
 import { handle, rateLimit, readJson } from "@/lib/server/http";
 import { deleteModelSettings, deleteModelSettingsSchema, getModelSettingsInfo, saveModelSettings, saveModelSettingsSchema } from "@/lib/server/model-settings";
 
@@ -17,6 +17,7 @@ export async function PUT(request: Request) {
   return handle(async () => {
     const auth = await requireAuth();
     const input = saveModelSettingsSchema.parse(await readJson(request));
+    assertAuthActive(auth);
     rateLimit(`model-settings:write:${auth.user.id}`, 30, 60_000);
     return { settings: await saveModelSettings(auth, input) };
   });
@@ -26,6 +27,7 @@ export async function DELETE(request: Request) {
   return handle(async () => {
     const auth = await requireAuth();
     const { base_version } = deleteModelSettingsSchema.parse(await readJson(request));
+    assertAuthActive(auth);
     rateLimit(`model-settings:write:${auth.user.id}`, 30, 60_000);
     return { settings: await deleteModelSettings(auth, base_version) };
   });

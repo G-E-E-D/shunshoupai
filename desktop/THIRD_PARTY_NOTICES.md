@@ -12,6 +12,15 @@ The native QR encoder is Project Nayuki's QR Code Generator v1.8.0, under the MI
 license included in `licenses/qrcodegen.hpp`. Its source is in this repository's
 `desktop/vendor/` directory.
 
+QR image decoding uses statically linked **ZXing-C++ 3.1.1**, under Apache-2.0.
+Its license and upstream notices are included in `licenses/ZXing/`. Only QR
+readers are enabled; camera access and barcode writing are not part of this
+dependency. The complete upstream source archive is pinned by SHA-256 in
+`desktop/CMakeLists.txt`:
+https://github.com/zxing-cpp/zxing-cpp/releases/tag/v3.1.1 .
+ZXing's bundled libzueci character conversion code is BSD-3-Clause; its
+copyright/license and upstream README are also retained in `licenses/ZXing/`.
+
 **Node.js 24** and its bundled third-party notices are in `licenses/Node-LICENSE`.
 Node.js source: https://github.com/nodejs/node .
 

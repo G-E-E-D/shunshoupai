@@ -36,6 +36,7 @@ import android.widget.FrameLayout;
 import android.widget.ProgressBar;
 import android.widget.TextView;
 import android.widget.Toast;
+import android.widget.LinearLayout;
 
 import androidx.activity.ComponentActivity;
 import androidx.activity.OnBackPressedCallback;
@@ -81,8 +82,9 @@ public final class MainActivity extends ComponentActivity {
     private OfflineScheduleView offlineScreen;
     private LocalScheduleStore scheduleStore;
     private ScheduleSync scheduleSync;
+    private DeviceHostRuntime deviceHost;
+    private DevicePairingDialog pairingDialog;
     private boolean foreground;
-    private boolean awaitingPairing;
     private final Runnable syncTick = new Runnable() {
         @Override public void run() {
             if (!foreground) return;
@@ -131,24 +133,29 @@ public final class MainActivity extends ComponentActivity {
         configureWebView();
 
         scheduleStore = new LocalScheduleStore(this);
-        scheduleSync = new ScheduleSync(scheduleStore, handler, (origin, scope, message, loginRequired) -> {
-            if (!origin.equals(serverAddress) || changingServer) return;
-            if (scope != null) offlineScreen.setScope(scope);
-            offlineScreen.setStatus(message);
-            if (awaitingPairing && scope != null && !loginRequired) {
-                awaitingPairing = false;
-                showOfflineScreen();
-            }
+        scheduleStore.initialize(preferences.getString(SERVER_KEY, ""));
+        deviceHost = new DeviceHostRuntime(this, scheduleStore, handler, () -> {
+            if (isFinishing() || isDestroyed() || offlineScreen == null) return;
+            offlineScreen.refresh();
+            if (setupScreen.getVisibility() == View.VISIBLE) renderPeers();
         });
-        offlineScreen = new OfflineScheduleView(this, scheduleStore, this::showConnectionSettings, () -> {
-            if (serverAddress.isEmpty()) showConnectionSettings();
-            else reloadService();
-        }, this::syncSchedules);
+        scheduleSync = new ScheduleSync(this, scheduleStore, handler, deviceHost, (origin, scope, message, pairingRequired) -> {
+            if (changingServer) return;
+            offlineScreen.setStatus(message);
+            if (setupScreen.getVisibility() == View.VISIBLE) renderPeers();
+        });
+        offlineScreen = new OfflineScheduleView(this, scheduleStore, this::showConnectionSettings, this::reloadService, this::syncSchedules);
         offlineScreen.setId(R.id.offline_screen);
+        offlineScreen.setScope(scheduleStore.activeScope());
         ((FrameLayout) findViewById(R.id.root)).addView(offlineScreen, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
 
         connectButton.setOnClickListener(view -> connectFromInput());
         findViewById(R.id.scan_button).setOnClickListener(view -> startQrScanner());
+        findViewById(R.id.paste_pairing_link).setOnClickListener(view -> {
+            EditText input=new EditText(this);input.setHint("粘贴另一台设备的配对链接");input.setInputType(android.text.InputType.TYPE_CLASS_TEXT | android.text.InputType.TYPE_TEXT_VARIATION_URI);input.setSingleLine(true);
+            new AlertDialog.Builder(this).setTitle("粘贴配对链接").setView(input).setNegativeButton("取消",null).setPositiveButton("继续",(dialog,which)->handleScanResult(input.getText().toString())).show();
+        });
+        findViewById(R.id.show_pairing_code).setOnClickListener(view -> showPairingCode());
         serverInput.setOnEditorActionListener((view, actionId, event) -> {
             if (actionId == EditorInfo.IME_ACTION_GO) { connectFromInput(); return true; }
             return false;
@@ -167,7 +174,9 @@ public final class MainActivity extends ComponentActivity {
             return true;
         });
         findViewById(R.id.error_settings).setOnClickListener(view -> showConnectionSettings());
-        findViewById(R.id.cancel_connection).setOnClickListener(view -> showOfflineScreen());
+        findViewById(R.id.cancel_connection).setOnClickListener(view -> { cancelPairing(); showOfflineScreen(); });
+        findViewById(R.id.unpair_device).setOnClickListener(view -> unpairDevice());
+        findViewById(R.id.local_spaces).setOnClickListener(view -> chooseLocalSpace());
         findViewById(R.id.error_offline).setOnClickListener(view -> showOfflineScreen());
         getOnBackPressedDispatcher().addCallback(this, new OnBackPressedCallback(true) {
             @Override public void handleOnBackPressed() { navigateBack(); }
@@ -178,11 +187,14 @@ public final class MainActivity extends ComponentActivity {
             try {
                 serverAddress = ServerAddress.normalize(saved);
                 serverInput.setText(serverAddress);
-                offlineScreen.setScope(scheduleStore.cachedScope(serverAddress));
             } catch (IllegalArgumentException error) {
                 preferences.edit().remove(SERVER_KEY).apply();
                 serverAddress = "";
             }
+        }
+        if (!preferences.getBoolean("device_pairing_migrated", false)) {
+            CookieManager.getInstance().removeAllCookies(ignored -> CookieManager.getInstance().flush());
+            preferences.edit().putBoolean("device_pairing_migrated", true).apply();
         }
         showOfflineScreen();
         if(state!=null)offlineScreen.restoreEditor(state.getString("offline_edit_id"));
@@ -190,15 +202,7 @@ public final class MainActivity extends ComponentActivity {
 
     private void syncSchedules() {
         if (scheduleSync == null || changingServer || !foreground || offlineScreen == null) return;
-        if(offlineScreen.getVisibility()==View.VISIBLE) {scheduleSync.sync(serverAddress);return;}
-        // Account changes inside the WebView own their refresh-cookie lifecycle.
-        // Only bootstrap once after a QR has visibly finished authentication.
-        if(awaitingPairing && pageReady && webView!=null && webScreen.getVisibility()==View.VISIBLE) {
-            final WebView expected=webView;final String origin=serverAddress;
-            expected.evaluateJavascript("Boolean(document.querySelector('header button[aria-label=\"打开账号设置\"]'))",value->{
-                if("true".equals(value)&&awaitingPairing&&expected==webView&&origin.equals(serverAddress)&&!changingServer&&foreground&&webScreen.getVisibility()==View.VISIBLE)scheduleSync.sync(origin);
-            });
-        }
+        if(webScreen.getVisibility()!=View.VISIBLE) scheduleSync.sync();
     }
 
     private void showOfflineScreen() {
@@ -410,7 +414,11 @@ public final class MainActivity extends ComponentActivity {
         }
         serverInput.setText(scanned.serviceRoot);
         connectionError.setVisibility(View.GONE);
-        connectFromInput(scanned.hasPairing ? scanned.initialUrl : null);
+        if (!scanned.hasPairing) { showScanHelp(R.string.scan_pair_required); return; }
+        showConnectionSettings();
+        new AlertDialog.Builder(this).setTitle("与此设备共享日程？")
+            .setMessage("配对会合并双方主日程和未来修改，并继续传播到各自已配对的设备。取消配对只停止之后的同步，无法撤回已经传出的副本。模型密钥和设置不会传播。请确认这是你在可信局域网中的设备。")
+            .setNegativeButton("取消",null).setPositiveButton("同意配对并共享日程",(dialog,which)->pairDevice(scanned)).show();
     }
 
     private void showScanHelp(int message) {
@@ -420,83 +428,127 @@ public final class MainActivity extends ComponentActivity {
     }
 
     private void connectFromInput() {
-        connectFromInput(null);
-    }
-
-    private void connectFromInput(String initialUrl) {
         if (changingServer) return;
-        final String next;
-        try {
-            next = ServerAddress.normalize(serverInput.getText().toString());
-        } catch (IllegalArgumentException error) {
-            connectionError.setText(error.getMessage());
-            connectionError.setVisibility(View.VISIBLE);
-            serverInput.requestFocus();
-            return;
-        }
-        connectionError.setVisibility(View.GONE);
-        if (!serverAddress.isEmpty() && !serverAddress.equals(next)) {
-            new AlertDialog.Builder(this)
-                .setTitle(R.string.switch_server_title)
-                .setMessage(R.string.server_changed)
-                .setNegativeButton(R.string.cancel, null)
-                .setPositiveButton(R.string.switch_server_confirm, (dialog, which) -> connectTo(next, initialUrl))
-                .show();
-        } else connectTo(next, initialUrl);
+        showOfflineScreen();
+        syncSchedules();
     }
 
-    private void connectTo(String next, String initialUrl) {
+    private boolean startDeviceHost() {
+        try { deviceHost.start(); return true; }
+        catch (Exception error) { offlineScreen.setStatus("本机日程可正常使用，暂时无法开启局域网接收"); return false; }
+    }
+
+    private void showPairingCode() {
+        if (changingServer || !startDeviceHost()) return;
+        if (pairingDialog != null) pairingDialog.dismiss();
+        pairingDialog = new DevicePairingDialog(this, deviceHost.port(), deviceHost::issueTicket);
+        pairingDialog.show();
+    }
+
+    private void pairDevice(ScannedConnection scanned) {
         hideKeyboard();
-        scheduleSync.invalidate();
-        awaitingPairing = initialUrl != null;
-        if (serverAddress.equals(next) && initialUrl == null) {
-            showWebScreen();
-            reloadService();
-            return;
+        // Scanner activities pause this activity; restart the callback endpoint before redeem.
+        if (!startDeviceHost()) { showScanHelp(R.string.scan_unavailable); return; }
+        if (!scheduleStore.isPrimary(scheduleStore.activeScope())) {
+            new AlertDialog.Builder(this).setTitle("合并本机主日程")
+                .setMessage("配对会合并主日程，并继续与其他已配对设备同步。当前查看的旧资料保持独立，可在资料列表中主动导入。")
+                .setNegativeButton("取消", null).setPositiveButton("配对主日程", (dialog, which) -> {
+                    scheduleStore.setActiveScope(scheduleStore.primaryScope());
+                    offlineScreen.setScope(scheduleStore.primaryScope()); pairDevice(scanned);
+                }).show(); return;
         }
+        scheduleSync.invalidate();
         changingServer = true;
         connectButton.setEnabled(false);
-        loadGeneration++;
-        checkingContent = false;
-        pageReady = false;
-        handler.removeCallbacks(loadTimeout);
-        handler.removeCallbacks(contentCheck);
-        if (webView != null) {
-            webView.stopLoading();
-            // Keep the XML WebView and avoid replacing its compositor after a
-            // camera round-trip. about:blank terminates the old document before
-            // its account storage is cleared.
-            webView.loadUrl("about:blank");
-            webView.clearHistory();
-            webView.clearCache(true);
-            webView.clearFormData();
-        }
-        clearHistoryOnReady = true;
-        WebStorage.getInstance().deleteAllData();
-        CookieManager.getInstance().removeAllCookies(removed -> {
+        findViewById(R.id.scan_button).setEnabled(false);
+        if (webView != null) { webView.stopLoading(); webView.loadUrl("about:blank"); }
+        connectionError.setText("正在验证设备并配对…本机日程仍可使用。");
+        connectionError.setVisibility(View.VISIBLE);
+        scheduleSync.pair(scanned, (origin, scope, error) -> {
             if (isFinishing() || isDestroyed()) return;
-            CookieManager.getInstance().flush();
-            serverAddress = next;
-            preferences.edit().putString(SERVER_KEY, next).apply();
-            serverInput.setText(next);
-            offlineScreen.setScope(scheduleStore.cachedScope(next));
             changingServer = false;
             connectButton.setEnabled(true);
-            showWebScreen();
-            reloadService(initialUrl);
+            findViewById(R.id.scan_button).setEnabled(true);
+            if (error != null) {
+                connectionError.setText(error); connectionError.setVisibility(View.VISIBLE);
+                return;
+            }
+            serverAddress = origin;
+            preferences.edit().putString(SERVER_KEY, origin).apply();
+            serverInput.setText(origin);
+            scheduleStore.setActiveScope(scope);
+            offlineScreen.setScope(scope);
+            offlineScreen.setStatus("设备已配对，正在合并两端日程");
+            showOfflineScreen();
         });
     }
 
+    private void cancelPairing() {
+        if (!changingServer) return;
+        scheduleSync.invalidate(); changingServer = false;
+        connectButton.setEnabled(true); findViewById(R.id.scan_button).setEnabled(true);
+    }
+
+    private void unpairDevice() {
+        try { for (org.json.JSONObject peer : scheduleStore.peers()) if (peer.optBoolean("enabled")) { unpairDevice(peer); return; } }
+        catch (Exception ignored) { }
+    }
+
+    private void unpairDevice(org.json.JSONObject peer) {
+        new AlertDialog.Builder(this).setTitle("取消与「" + peer.optString("name") + "」的配对？")
+            .setMessage("停止双方直接同步。本机已有日程继续保留；已传到其他已配对设备的内容也会保留。")
+            .setNegativeButton("保留配对", null)
+            .setPositiveButton("取消配对", (dialog, which) -> {
+                cancelPairing();
+                scheduleSync.unpair(peer.optString("peer_id"), error -> {
+                    offlineScreen.setStatus(error == null ? "已取消配对，本机日程继续保留" : error);
+                    renderPeers();
+                });
+                renderPeers();
+            }).show();
+    }
+
+    private void chooseLocalSpace() {
+        try {
+            java.util.List<org.json.JSONObject> spaces = scheduleStore.spaces();
+            String[] labels = new String[spaces.size()];
+            for (int i = 0; i < spaces.size(); i++) labels[i] = scheduleStore.isPrimary(spaces.get(i).getString("scope")) ? "本机主日程 · 自动同步" : spaces.get(i).getString("label") + " · 旧资料 " + (i + 1);
+            new AlertDialog.Builder(this).setTitle("本机保存的日程").setItems(labels, (dialog, which) -> {
+                String scope=spaces.get(which).optString("scope");
+                if (scheduleStore.isPrimary(scope)) { selectSpace(scope); return; }
+                new AlertDialog.Builder(this).setTitle(labels[which]).setMessage("旧资料独立保留。导入后内容会合并进主日程，并同步到所有已配对设备；冲突会保留供你选择。")
+                    .setNegativeButton("返回", null).setNeutralButton("查看旧资料", (d,w)->selectSpace(scope))
+                    .setPositiveButton("导入主日程", (d,w)->{
+                        connectionError.setText("正在导入，原资料会继续保留…"); connectionError.setVisibility(View.VISIBLE);
+                        new Thread(()->{try { scheduleStore.replica().importFrom(scope); handler.post(()->{if(!isDestroyed())selectSpace(scheduleStore.primaryScope());}); }
+                            catch(Exception error){handler.post(()->{if(!isDestroyed()){connectionError.setText("无法导入，原资料仍保留。");connectionError.setVisibility(View.VISIBLE);}});}},"calendar-import").start();
+                    }).show();
+            }).setNegativeButton("返回", null).show();
+        } catch (Exception error) { Toast.makeText(this, "无法读取本机日程，请重试。", Toast.LENGTH_SHORT).show(); }
+    }
+    private void selectSpace(String scope) {
+        scheduleStore.setActiveScope(scope); offlineScreen.setScope(scope);
+        offlineScreen.setStatus(scheduleStore.isPrimary(scope) ? "主日程保存在本机，设备可达后自动合并" : "正在查看保留的旧资料，可在设备与同步中导入主日程");
+        showOfflineScreen();
+    }
+    private void renderPeers() {
+        try {
+            LinearLayout rows=findViewById(R.id.peer_rows);rows.removeAllViews();int count=0;
+            for(org.json.JSONObject peer:scheduleStore.peers()) if(peer.optBoolean("enabled")) {
+                count++; TextView text=new TextView(this);text.setText(peer.optString("name")+" · "+scheduleSync.status(peer.optString("peer_id")));text.setTextSize(14);text.setPadding(0,12,0,4);rows.addView(text);
+                Button remove=new Button(this);remove.setAllCaps(false);remove.setText("取消与此设备配对");remove.setOnClickListener(v->unpairDevice(peer));rows.addView(remove);
+            }
+            ((TextView)findViewById(R.id.paired_device)).setText("本机主日程 · "+count+" 台已配对设备\n"+(deviceHost.isRunning()?"前台接收已开启，双方保持应用打开即可合并":"应用回到前台后接收同步"));
+            findViewById(R.id.unpair_device).setVisibility(View.GONE);
+            findViewById(R.id.local_spaces).setVisibility(scheduleStore.spaces().size()>1?View.VISIBLE:View.GONE);
+        } catch(Exception ignored) { }
+    }
     private void showConnectionSettings() {
-        hideKeyboard();
-        scheduleSync.invalidate();
-        offlineScreen.setVisibility(View.GONE);
-        webScreen.setVisibility(View.GONE);
-        setupScreen.setVisibility(View.VISIBLE);
-        connectionError.setVisibility(View.GONE);
-        serverInput.setText(serverAddress);
+        hideKeyboard(); scheduleSync.invalidate();
+        offlineScreen.setVisibility(View.GONE);webScreen.setVisibility(View.GONE);setupScreen.setVisibility(View.VISIBLE);
+        connectionError.setVisibility(View.GONE);renderPeers();
         findViewById(R.id.cancel_connection).setVisibility(View.VISIBLE);
-        if (webView != null) webView.onPause();
+        if(webView!=null){webView.stopLoading();webView.onPause();}
     }
 
     private void showWebScreen() {
@@ -515,7 +567,24 @@ public final class MainActivity extends ComponentActivity {
     }
 
     private void reloadService() {
-        reloadService(null);
+        if(changingServer)return;
+        try {
+            java.util.List<org.json.JSONObject> computers=new java.util.ArrayList<>();
+            for(org.json.JSONObject peer:scheduleStore.peers())if(peer.optBoolean("enabled")&&peer.getJSONObject("capabilities").optBoolean("web"))computers.add(peer);
+            if(computers.isEmpty()){showConnectionSettings();connectionError.setText("电脑工具需要一台已配对的电脑。手机之间仍可直接同步日程。");connectionError.setVisibility(View.VISIBLE);return;}
+            if(webScreen.getVisibility()==View.VISIBLE)for(org.json.JSONObject peer:computers)if(serverAddress.equals(peer.getString("origin"))){openComputer(peer);return;}
+            if(computers.size()==1){openComputer(computers.get(0));return;}
+            String[] names=new String[computers.size()];for(int i=0;i<names.length;i++)names[i]=computers.get(i).getString("name");
+            new AlertDialog.Builder(this).setTitle("选择运行工具的电脑").setItems(names,(dialog,which)->openComputer(computers.get(which))).setNegativeButton("返回",null).show();
+        }catch(Exception error){showConnectionSettings();}
+    }
+    private void openComputer(org.json.JSONObject peer) {
+        serverAddress=peer.optString("origin");
+        scheduleSync.openWeb(peer.optString("peer_id"),error->{
+            if(isFinishing()||isDestroyed())return;
+            if(error!=null){showConnectionSettings();connectionError.setText(error);connectionError.setVisibility(View.VISIBLE);}
+            else reloadService(null);
+        });
     }
 
     private void reloadService(String initialUrl) {
@@ -528,11 +597,9 @@ public final class MainActivity extends ComponentActivity {
             configureWebView();
         }
         showWebScreen();
-        String fragment = initialUrl != null && initialUrl.contains("#pair=")
-            ? initialUrl.substring(initialUrl.indexOf('#')) : "";
-        pendingPairingFragment = fragment;
+        pendingPairingFragment = "";
         tryingLegacyRoot = false;
-        loadWorkspaceUrl(serverAddress + "mobile" + fragment);
+        loadWorkspaceUrl(serverAddress + "mobile");
     }
 
     private void loadWorkspaceUrl(String url) {
@@ -641,7 +708,7 @@ public final class MainActivity extends ComponentActivity {
     }
 
     private void navigateBack() {
-        if (changingServer) return;
+        if (changingServer) cancelPairing();
         if (offlineScreen.getVisibility() == View.VISIBLE) finish();
         else showOfflineScreen();
     }
@@ -658,6 +725,10 @@ public final class MainActivity extends ComponentActivity {
 
     @Override protected void onPause() {
         foreground = false;
+        cancelPairing();
+        if(scheduleSync!=null)scheduleSync.invalidate();
+        if(pairingDialog!=null){pairingDialog.dismiss();pairingDialog=null;}
+        if(deviceHost!=null)deviceHost.stop();
         handler.removeCallbacks(syncTick);
         if (webView != null) webView.onPause();
         CookieManager.getInstance().flush();
@@ -667,6 +738,8 @@ public final class MainActivity extends ComponentActivity {
     @Override protected void onResume() {
         super.onResume();
         foreground = true;
+        startDeviceHost();
+        if(setupScreen.getVisibility()==View.VISIBLE)renderPeers();
         handler.removeCallbacks(syncTick);
         handler.post(syncTick);
         if (webView != null && webScreen != null && webScreen.getVisibility() == View.VISIBLE) {
@@ -678,6 +751,8 @@ public final class MainActivity extends ComponentActivity {
     }
 
     @Override protected void onDestroy() {
+        if(pairingDialog!=null)pairingDialog.dismiss();
+        if(deviceHost!=null)deviceHost.stop();
         if (offlineScreen != null) offlineScreen.destroy();
         if (scheduleSync != null) scheduleSync.close();
         handler.removeCallbacksAndMessages(null);

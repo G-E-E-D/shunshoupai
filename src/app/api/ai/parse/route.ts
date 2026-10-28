@@ -1,6 +1,6 @@
 import { parseInputSchema } from "@/lib/schemas";
 import { parseText } from "@/lib/parser";
-import { requireAuth } from "@/lib/server/auth";
+import { assertAuthActive, requireAuth } from "@/lib/server/auth";
 import { consumeAiQuota, listEvents } from "@/lib/server/events";
 import { AppError } from "@/lib/server/errors";
 import { handle, rateLimit, readJson } from "@/lib/server/http";
@@ -12,6 +12,7 @@ export async function POST(request: Request) {
   return handle(async () => {
     const auth = await requireAuth();
     const { text } = parseInputSchema.parse(await readJson(request));
+    assertAuthActive(auth);
     rateLimit(`parse:${auth.user.id}`, 6, 60_000);
     await consumeAiQuota(auth);
     // The reference clock is server-owned; the browser cannot silently shift 'today'.
@@ -22,6 +23,7 @@ export async function POST(request: Request) {
       new Date(now.getTime() + 31 * 86_400_000).toISOString(),
     );
     const config = await resolveModelConfig(auth);
+    assertAuthActive(auth);
     try {
       return await parseText(text, now, busy, config ?? null);
     } catch (error) {

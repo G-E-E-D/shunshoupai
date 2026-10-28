@@ -1,0 +1,452 @@
+{
+  "valid": [
+    {
+      "name": "three-way-edit-delete",
+      "local": [
+        {
+          "revision_id": "00000002-1234-4abc-8abc-123456789abc",
+          "ancestors": [
+            "00000001-1234-4abc-8abc-123456789abc"
+          ],
+          "payload": {
+            "title": "手机 A",
+            "start_local": "2030-10-28T09:00:00",
+            "end_local": "2030-10-28T10:00:00",
+            "timezone": "Asia/Shanghai",
+            "status": "planned",
+            "deleted": false
+          },
+          "author": "测试设备",
+          "changed_at": 1800000000002
+        },
+        {
+          "revision_id": "00000003-1234-4abc-8abc-123456789abc",
+          "ancestors": [
+            "00000001-1234-4abc-8abc-123456789abc"
+          ],
+          "payload": {
+            "title": "手机 B",
+            "start_local": "2030-10-28T09:00:00",
+            "end_local": "2030-10-28T10:00:00",
+            "timezone": "Asia/Shanghai",
+            "status": "planned",
+            "deleted": false
+          },
+          "author": "测试设备",
+          "changed_at": 1800000000003
+        }
+      ],
+      "incoming": [
+        {
+          "revision_id": "00000004-1234-4abc-8abc-123456789abc",
+          "ancestors": [
+            "00000001-1234-4abc-8abc-123456789abc"
+          ],
+          "payload": {
+            "title": "原安排",
+            "start_local": "2030-10-28T09:00:00",
+            "end_local": "2030-10-28T10:00:00",
+            "timezone": "Asia/Shanghai",
+            "status": "planned",
+            "deleted": true
+          },
+          "author": "测试设备",
+          "changed_at": 1800000000004
+        },
+        {
+          "revision_id": "00000001-1234-4abc-8abc-123456789abc",
+          "ancestors": [],
+          "payload": {
+            "title": "安排 1",
+            "start_local": "2030-10-28T09:00:00",
+            "end_local": "2030-10-28T10:00:00",
+            "timezone": "Asia/Shanghai",
+            "status": "planned",
+            "deleted": false
+          },
+          "author": "测试设备",
+          "changed_at": 1800000000001
+        }
+      ],
+      "expected": [
+        {
+          "revision_id": "00000002-1234-4abc-8abc-123456789abc",
+          "ancestors": [
+            "00000001-1234-4abc-8abc-123456789abc"
+          ],
+          "payload": {
+            "title": "手机 A",
+            "start_local": "2030-10-28T09:00:00",
+            "end_local": "2030-10-28T10:00:00",
+            "timezone": "Asia/Shanghai",
+            "status": "planned",
+            "deleted": false
+          },
+          "author": "测试设备",
+          "changed_at": 1800000000002
+        },
+        {
+          "revision_id": "00000003-1234-4abc-8abc-123456789abc",
+          "ancestors": [
+            "00000001-1234-4abc-8abc-123456789abc"
+          ],
+          "payload": {
+            "title": "手机 B",
+            "start_local": "2030-10-28T09:00:00",
+            "end_local": "2030-10-28T10:00:00",
+            "timezone": "Asia/Shanghai",
+            "status": "planned",
+            "deleted": false
+          },
+          "author": "测试设备",
+          "changed_at": 1800000000003
+        },
+        {
+          "revision_id": "00000004-1234-4abc-8abc-123456789abc",
+          "ancestors": [
+            "00000001-1234-4abc-8abc-123456789abc"
+          ],
+          "payload": {
+            "title": "原安排",
+            "start_local": "2030-10-28T09:00:00",
+            "end_local": "2030-10-28T10:00:00",
+            "timezone": "Asia/Shanghai",
+            "status": "planned",
+            "deleted": true
+          },
+          "author": "测试设备",
+          "changed_at": 1800000000004
+        }
+      ],
+      "distinct": 3
+    },
+    {
+      "name": "resolved-tombstone-absorbs-old-heads",
+      "local": [
+        {
+          "revision_id": "00000002-1234-4abc-8abc-123456789abc",
+          "ancestors": [
+            "00000001-1234-4abc-8abc-123456789abc"
+          ],
+          "payload": {
+            "title": "手机 A",
+            "start_local": "2030-10-28T09:00:00",
+            "end_local": "2030-10-28T10:00:00",
+            "timezone": "Asia/Shanghai",
+            "status": "planned",
+            "deleted": false
+          },
+          "author": "测试设备",
+          "changed_at": 1800000000002
+        },
+        {
+          "revision_id": "00000003-1234-4abc-8abc-123456789abc",
+          "ancestors": [
+            "00000001-1234-4abc-8abc-123456789abc"
+          ],
+          "payload": {
+            "title": "手机 B",
+            "start_local": "2030-10-28T09:00:00",
+            "end_local": "2030-10-28T10:00:00",
+            "timezone": "Asia/Shanghai",
+            "status": "planned",
+            "deleted": false
+          },
+          "author": "测试设备",
+          "changed_at": 1800000000003
+        },
+        {
+          "revision_id": "00000004-1234-4abc-8abc-123456789abc",
+          "ancestors": [
+            "00000001-1234-4abc-8abc-123456789abc"
+          ],
+          "payload": {
+            "title": "原安排",
+            "start_local": "2030-10-28T09:00:00",
+            "end_local": "2030-10-28T10:00:00",
+            "timezone": "Asia/Shanghai",
+            "status": "planned",
+            "deleted": true
+          },
+          "author": "测试设备",
+          "changed_at": 1800000000004
+        }
+      ],
+      "incoming": [
+        {
+          "revision_id": "00000005-1234-4abc-8abc-123456789abc",
+          "ancestors": [
+            "00000001-1234-4abc-8abc-123456789abc",
+            "00000002-1234-4abc-8abc-123456789abc",
+            "00000003-1234-4abc-8abc-123456789abc",
+            "00000004-1234-4abc-8abc-123456789abc"
+          ],
+          "payload": {
+            "title": "确认删除",
+            "start_local": "2030-10-28T09:00:00",
+            "end_local": "2030-10-28T10:00:00",
+            "timezone": "Asia/Shanghai",
+            "status": "planned",
+            "deleted": true
+          },
+          "author": "测试设备",
+          "changed_at": 1800000000005
+        }
+      ],
+      "expected": [
+        {
+          "revision_id": "00000005-1234-4abc-8abc-123456789abc",
+          "ancestors": [
+            "00000001-1234-4abc-8abc-123456789abc",
+            "00000002-1234-4abc-8abc-123456789abc",
+            "00000003-1234-4abc-8abc-123456789abc",
+            "00000004-1234-4abc-8abc-123456789abc"
+          ],
+          "payload": {
+            "title": "确认删除",
+            "start_local": "2030-10-28T09:00:00",
+            "end_local": "2030-10-28T10:00:00",
+            "timezone": "Asia/Shanghai",
+            "status": "planned",
+            "deleted": true
+          },
+          "author": "测试设备",
+          "changed_at": 1800000000005
+        }
+      ],
+      "distinct": 1
+    },
+    {
+      "name": "same-payload-keeps-independent-history",
+      "local": [
+        {
+          "revision_id": "00000007-1234-4abc-8abc-123456789abc",
+          "ancestors": [],
+          "payload": {
+            "title": "相同内容",
+            "start_local": "2030-10-28T09:00:00",
+            "end_local": "2030-10-28T10:00:00",
+            "timezone": "Asia/Shanghai",
+            "status": "planned",
+            "deleted": false
+          },
+          "author": "测试设备",
+          "changed_at": 1800000000007
+        }
+      ],
+      "incoming": [
+        {
+          "revision_id": "00000006-1234-4abc-8abc-123456789abc",
+          "ancestors": [],
+          "payload": {
+            "title": "相同内容",
+            "start_local": "2030-10-28T09:00:00",
+            "end_local": "2030-10-28T10:00:00",
+            "timezone": "Asia/Shanghai",
+            "status": "planned",
+            "deleted": false
+          },
+          "author": "测试设备",
+          "changed_at": 1800000000006
+        }
+      ],
+      "expected": [
+        {
+          "revision_id": "00000006-1234-4abc-8abc-123456789abc",
+          "ancestors": [],
+          "payload": {
+            "title": "相同内容",
+            "start_local": "2030-10-28T09:00:00",
+            "end_local": "2030-10-28T10:00:00",
+            "timezone": "Asia/Shanghai",
+            "status": "planned",
+            "deleted": false
+          },
+          "author": "测试设备",
+          "changed_at": 1800000000006
+        },
+        {
+          "revision_id": "00000007-1234-4abc-8abc-123456789abc",
+          "ancestors": [],
+          "payload": {
+            "title": "相同内容",
+            "start_local": "2030-10-28T09:00:00",
+            "end_local": "2030-10-28T10:00:00",
+            "timezone": "Asia/Shanghai",
+            "status": "planned",
+            "deleted": false
+          },
+          "author": "测试设备",
+          "changed_at": 1800000000007
+        }
+      ],
+      "distinct": 1
+    },
+    {
+      "name": "canonical-case-and-ancestry-order",
+      "local": [],
+      "incoming": [
+        {
+          "revision_id": "00000005-1234-4ABC-8ABC-123456789ABC",
+          "ancestors": [
+            "00000004-1234-4ABC-8ABC-123456789ABC",
+            "00000002-1234-4abc-8abc-123456789abc",
+            "00000001-1234-4abc-8abc-123456789abc",
+            "00000003-1234-4abc-8abc-123456789abc",
+            "00000002-1234-4abc-8abc-123456789abc"
+          ],
+          "payload": {
+            "title": "确认删除",
+            "start_local": "2030-10-28T09:00:00",
+            "end_local": "2030-10-28T10:00:00",
+            "timezone": "Asia/Shanghai",
+            "status": "planned",
+            "deleted": true
+          },
+          "author": "测试设备",
+          "changed_at": 1800000000005
+        }
+      ],
+      "expected": [
+        {
+          "revision_id": "00000005-1234-4abc-8abc-123456789abc",
+          "ancestors": [
+            "00000001-1234-4abc-8abc-123456789abc",
+            "00000002-1234-4abc-8abc-123456789abc",
+            "00000003-1234-4abc-8abc-123456789abc",
+            "00000004-1234-4abc-8abc-123456789abc"
+          ],
+          "payload": {
+            "title": "确认删除",
+            "start_local": "2030-10-28T09:00:00",
+            "end_local": "2030-10-28T10:00:00",
+            "timezone": "Asia/Shanghai",
+            "status": "planned",
+            "deleted": true
+          },
+          "author": "测试设备",
+          "changed_at": 1800000000005
+        }
+      ],
+      "distinct": 1
+    }
+  ],
+  "invalid": [
+    {
+      "name": "immutable-revision-collision",
+      "local": [
+        {
+          "revision_id": "00000001-1234-4abc-8abc-123456789abc",
+          "ancestors": [],
+          "payload": {
+            "title": "安排 1",
+            "start_local": "2030-10-28T09:00:00",
+            "end_local": "2030-10-28T10:00:00",
+            "timezone": "Asia/Shanghai",
+            "status": "planned",
+            "deleted": false
+          },
+          "author": "测试设备",
+          "changed_at": 1800000000001
+        }
+      ],
+      "incoming": [
+        {
+          "revision_id": "00000001-1234-4abc-8abc-123456789abc",
+          "ancestors": [],
+          "payload": {
+            "title": "改写旧版本",
+            "start_local": "2030-10-28T09:00:00",
+            "end_local": "2030-10-28T10:00:00",
+            "timezone": "Asia/Shanghai",
+            "status": "planned",
+            "deleted": false
+          },
+          "author": "测试设备",
+          "changed_at": 1800000000001
+        }
+      ],
+      "code": "REVISION_COLLISION"
+    },
+    {
+      "name": "causal-cycle",
+      "local": [
+        {
+          "revision_id": "00000008-1234-4abc-8abc-123456789abc",
+          "ancestors": [
+            "00000009-1234-4abc-8abc-123456789abc"
+          ],
+          "payload": {
+            "title": "安排 8",
+            "start_local": "2030-10-28T09:00:00",
+            "end_local": "2030-10-28T10:00:00",
+            "timezone": "Asia/Shanghai",
+            "status": "planned",
+            "deleted": false
+          },
+          "author": "测试设备",
+          "changed_at": 1800000000008
+        }
+      ],
+      "incoming": [
+        {
+          "revision_id": "00000009-1234-4abc-8abc-123456789abc",
+          "ancestors": [
+            "00000008-1234-4abc-8abc-123456789abc"
+          ],
+          "payload": {
+            "title": "安排 9",
+            "start_local": "2030-10-28T09:00:00",
+            "end_local": "2030-10-28T10:00:00",
+            "timezone": "Asia/Shanghai",
+            "status": "planned",
+            "deleted": false
+          },
+          "author": "测试设备",
+          "changed_at": 1800000000009
+        }
+      ],
+      "code": "CAUSAL_CYCLE"
+    },
+    {
+      "name": "missing-transitive-ancestor",
+      "local": [
+        {
+          "revision_id": "0000000a-1234-4abc-8abc-123456789abc",
+          "ancestors": [
+            "00000001-1234-4abc-8abc-123456789abc"
+          ],
+          "payload": {
+            "title": "安排 10",
+            "start_local": "2030-10-28T09:00:00",
+            "end_local": "2030-10-28T10:00:00",
+            "timezone": "Asia/Shanghai",
+            "status": "planned",
+            "deleted": false
+          },
+          "author": "测试设备",
+          "changed_at": 1800000000010
+        }
+      ],
+      "incoming": [
+        {
+          "revision_id": "0000000b-1234-4abc-8abc-123456789abc",
+          "ancestors": [
+            "0000000a-1234-4abc-8abc-123456789abc"
+          ],
+          "payload": {
+            "title": "安排 11",
+            "start_local": "2030-10-28T09:00:00",
+            "end_local": "2030-10-28T10:00:00",
+            "timezone": "Asia/Shanghai",
+            "status": "planned",
+            "deleted": false
+          },
+          "author": "测试设备",
+          "changed_at": 1800000000011
+        }
+      ],
+      "code": "INVALID_ANCESTRY"
+    }
+  ]
+}

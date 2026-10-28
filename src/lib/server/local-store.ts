@@ -6,6 +6,10 @@ import type { EventDraft, ScheduleEvent } from "../types";
 import { localToIso, isoToLocal } from "../time";
 import { AppError } from "./errors";
 import { syncRequestSchema, type SyncMutation, type SyncRequest, type SyncResponse, type SyncResult } from "../sync";
+import { DeviceStore } from "./device-store";
+import { PeerStore } from "./peer-store";
+import { ReplicaStore } from "./replica-store";
+import type { ReplicaRecord } from "../replica";
 
 export const LOCAL_SESSION_MAX_AGE = 30 * 24 * 60 * 60;
 
@@ -37,6 +41,9 @@ function publicEvent(row: EventRow): ScheduleEvent {
 
 export class LocalStore {
   private db: DatabaseSync;
+  readonly devices: DeviceStore;
+  readonly replicas: ReplicaStore;
+  readonly peers: PeerStore;
 
   constructor(filename: string) {
     if (filename !== ":memory:") mkdirSync(dirname(resolve(filename)), { recursive: true });
@@ -93,6 +100,9 @@ export class LocalStore {
         consumed_at INTEGER
       );
     `);
+    this.devices = new DeviceStore(this.db);
+    this.replicas = new ReplicaStore(this.db);
+    this.peers = new PeerStore(this.db);
   }
 
   close() { this.db.close(); }
@@ -173,13 +183,13 @@ export class LocalStore {
     const rows = this.db.prepare(`SELECT * FROM events WHERE user_id=? AND deleted_at IS NULL
       AND start_at<? AND end_at>? ORDER BY start_at,id LIMIT 501`).all(userId, to, from) as unknown as EventRow[];
     if (rows.length > 500) throw new AppError("TOO_MANY_EVENTS", "这个时间范围内日程过多，请缩小查询范围。", 400);
-    return rows.map(publicEvent);
+    return rows.map(row => this.replicas.decorate(publicEvent(row), userId));
   }
 
   event(userId: string, id: string): ScheduleEvent {
     const row = this.db.prepare("SELECT * FROM events WHERE user_id=? AND id=?").get(userId, id) as EventRow | undefined;
     if (!row) throw new AppError("NOT_FOUND", "日程不存在或已删除。", 404);
-    return publicEvent(row);
+    return this.replicas.decorate(publicEvent(row), userId);
   }
 
   private assertAvailable(userId: string, start: string, end: string, excludeId = "") {
@@ -210,6 +220,7 @@ export class LocalStore {
         };
         this.db.prepare(`INSERT INTO events(id,user_id,title,start_at,end_at,timezone,status,version,created_at,updated_at)
           VALUES (?,?,?,?,?,?,?,?,?,?)`).run(event.id, userId, event.title, start, end, event.timezone, event.status, 1, now, now);
+        this.replicas.seed({ ...event, user_id: userId }, this.replicaAuthor());
         events.push(event);
       }
       this.db.prepare("INSERT INTO mutation_requests(user_id,request_id,payload_hash,result,created_at) VALUES (?,?,?,?,?)")
@@ -222,6 +233,8 @@ export class LocalStore {
     return this.transaction(() => {
       const row = this.db.prepare("SELECT * FROM events WHERE user_id=? AND id=?").get(userId, id) as EventRow | undefined;
       if (!row) throw new AppError("NOT_FOUND", "日程不存在或已删除。", 404);
+      this.replicas.assertResolved(userId, id);
+      this.replicas.seed(row, this.replicaAuthor());
       if (row.deleted_at) {
         if (deleting && (row.version === baseVersion + 1 || row.version === baseVersion)) return { event: publicEvent(row) };
         throw new AppError("NOT_FOUND", "日程不存在或已删除。", 404);
@@ -240,8 +253,33 @@ export class LocalStore {
       this.db.prepare(`UPDATE events SET title=?,start_at=?,end_at=?,status=?,version=version+1,updated_at=?,deleted_at=?
         WHERE user_id=? AND id=? AND version=?`).run(patch.title ?? row.title, start, end, status, now, deleting ? now : null, userId, id, baseVersion);
       const updated = this.db.prepare("SELECT * FROM events WHERE user_id=? AND id=?").get(userId, id) as unknown as EventRow;
+      this.replicas.change(updated, this.replicaAuthor());
       return { event: publicEvent(updated) };
     });
+  }
+
+  private replicaAuthor() { return this.devices.ready() ? this.devices.context().device.name : "本机"; }
+
+  replicaPage(space: string, after?: string) {
+    return this.transaction(() => this.replicas.page(space, after, this.replicaAuthor()));
+  }
+
+  exchange(space: string, records: ReplicaRecord[], after?: string) {
+    return this.transaction(() => {
+      for (const record of records) this.replicas.merge(space, record, this.replicaAuthor());
+      return this.replicas.page(space, after, this.replicaAuthor());
+    });
+  }
+
+  resolveReplica(space: string, id: string, baseVersion: number, revisionId: string) {
+    return this.transaction(() => {
+      this.replicas.resolve(space, id, baseVersion, revisionId, this.replicaAuthor());
+      return { event: this.event(space, id) };
+    });
+  }
+
+  disconnectPeer(id: string) {
+    this.transaction(() => { this.peers.disable(id); this.devices.revokeClient(id); });
   }
 
   consumeAiQuota(userId: string, limit: number): boolean {
@@ -257,7 +295,7 @@ export class LocalStore {
 
   sync(userId: string, input: SyncRequest): SyncResponse {
     const request = syncRequestSchema.parse(input);
-    if (request.account_id !== userId) throw new AppError("ACCOUNT_MISMATCH", "登录账号已改变，手机日程已保留，请切回原账号后同步。", 409);
+    if (request.account_id !== userId) throw new AppError("ACCOUNT_MISMATCH", "配对空间已改变，本机日程已保留，请重新核对设备。", 409);
     return this.transaction(() => {
       const results = request.mutations.map((mutation) => this.syncMutation(userId, mutation));
       // Include tombstones: absence from a page never means an event was deleted.
@@ -278,6 +316,7 @@ export class LocalStore {
     }
     const row = this.db.prepare("SELECT * FROM events WHERE user_id=? AND id=?").get(userId, mutation.id) as EventRow | undefined;
     let result: SyncResult;
+    this.db.exec("SAVEPOINT legacy_mutation");
     try {
       if (mutation.base_version === 0) {
         // Globally unique IDs may never take over another account's row.
@@ -286,6 +325,8 @@ export class LocalStore {
         if (!row) throw new AppError("NOT_FOUND", "这条日程已不存在，手机内容已保留。", 409);
         if (row.version !== mutation.base_version || row.deleted_at) throw new AppError("VERSION_CONFLICT", "两台设备都修改了这条日程，手机内容已保留，请选择要使用的版本。", 409);
       }
+      this.replicas.assertResolved(userId, mutation.id);
+      if (row) this.replicas.seed(row, this.replicaAuthor());
       const start = mutation.event ? localToIso(mutation.event.start_local) : row!.start_at;
       const end = mutation.event ? localToIso(mutation.event.end_local) : row!.end_at;
       const status = mutation.event?.status ?? row!.status;
@@ -300,11 +341,14 @@ export class LocalStore {
           WHERE user_id=? AND id=?`).run(mutation.event?.title ?? row!.title, start, end, status, now, mutation.deleted ? now : null, userId, mutation.id);
       }
       const updated = this.db.prepare("SELECT * FROM events WHERE user_id=? AND id=?").get(userId, mutation.id) as unknown as EventRow;
+      this.replicas.change(updated, this.replicaAuthor());
       result = { mutation_id: mutation.mutation_id, status: "applied", event: publicEvent(updated) };
     } catch (error) {
       if (!(error instanceof AppError)) throw error;
+      this.db.exec("ROLLBACK TO legacy_mutation");
       result = { mutation_id: mutation.mutation_id, status: "conflict", code: error.code, message: error.message, ...(row ? { event: publicEvent(row) } : {}) };
     }
+    this.db.exec("RELEASE legacy_mutation");
     this.db.prepare("INSERT INTO sync_mutations(user_id,mutation_id,payload_hash,result) VALUES(?,?,?,?)")
       .run(userId, mutation.mutation_id, payloadHash, JSON.stringify(result));
     return result;

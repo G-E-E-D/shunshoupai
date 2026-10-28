@@ -52,6 +52,7 @@ Copy-Item -LiteralPath $nodeLicense -Destination (Join-Path $licenses.FullName '
 Copy-Item -LiteralPath (Join-Path $desktopRoot 'THIRD_PARTY_NOTICES.md') -Destination $StageDir
 Copy-Item -LiteralPath (Join-Path $desktopRoot 'vendor\qrcodegen.hpp') -Destination $licenses.FullName
 Copy-Item -LiteralPath (Join-Path $desktopRoot 'licenses\Qt') -Destination $licenses.FullName -Recurse
+Copy-Item -LiteralPath (Join-Path $BuildDir 'third-party\ZXing') -Destination $licenses.FullName -Recurse
 
 $backend = Join-Path $StageDir 'resources\backend'
 New-Item -ItemType Directory -Path $backend -Force | Out-Null

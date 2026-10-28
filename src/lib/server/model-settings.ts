@@ -25,7 +25,7 @@ type SettingsRuntime = {
 
 function dbFailure(error: { message?: string; code?: string }): never {
   if (error.message?.includes("VERSION_CONFLICT")) throw new AppError("VERSION_CONFLICT", "模型设置已在另一端更新，请重新加载后再操作。", 409);
-  if (error.code === "42501" || error.message?.includes("UNAUTHORIZED")) throw new AppError("UNAUTHORIZED", "请先登录。", 401);
+  if (error.code === "42501" || error.message?.includes("UNAUTHORIZED")) throw new AppError("UNAUTHORIZED", "请先配对这台设备。", 401);
   throw new AppError("MODEL_SETTINGS_UNAVAILABLE", "无法读取或保存个人模型设置，请检查数据库迁移及服务配置。", 503);
 }
 
@@ -116,6 +116,7 @@ export async function saveModelSettings(auth: AuthContext, input: z.infer<typeof
   const hint = maskModelKey(config.apiKey);
   let record: ModelSettingRecord | null;
   if (!auth.supabase) {
+      if (auth.grant) (runtime.store ?? localStore()).devices.assertActive(auth.grant);
     record = (runtime.store ?? localStore()).saveModelSetting(auth.user.id, parsed.base_version, {
       base_url: config.baseUrl, model: config.model, api_key_ciphertext: encrypted, key_hint: hint,
     });

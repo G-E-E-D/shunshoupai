@@ -32,14 +32,98 @@ public class OfflineScheduleInstrumentedTest {
     private JSONObject remote(String id,String title,int version,boolean deleted)throws Exception{return new JSONObject().put("id",id).put("title",title).put("start_at","2026-10-27T02:00:00.000Z").put("end_at","2026-10-27T03:00:00.000Z").put("status","planned").put("version",version).put("deleted_at",deleted?"2026-10-27T04:00:00.000Z":JSONObject.NULL);}
     private JSONObject response(JSONObject mutation,JSONObject event,String status)throws Exception{return new JSONObject().put("results",new JSONArray().put(new JSONObject().put("mutation_id",mutation.getString("mutation_id")).put("status",status).put("event",event))).put("events",new JSONArray().put(event));}
 
-    @Test public void firstUsePersistsWithoutServerAndOnlyFirstAccountReceivesGuestEvents()throws Exception{
+    @Test public void firstUsePersistsWithoutServerAndOnlyFirstPairedSpaceReceivesLocalEvents()throws Exception{
+        String deviceId=store.deviceId();
         String id=store.save("guest",null,payload("独立使用"));store.close();store=new LocalScheduleStore(context);
+        assertEquals(deviceId,store.deviceId());
         assertEquals("独立使用",store.list("guest").get(0).getString("title"));
-        String a=store.bind("http://computer/",new JSONObject().put("id","a").put("email","a@example.test"));
-        assertEquals(id,store.list(a).get(0).getString("id"));assertTrue(store.list("guest").isEmpty());
-        String b=store.bind("http://computer/",new JSONObject().put("id","b").put("email","b@example.test"));
+        TestPeer first=new TestPeer(),second=new TestPeer();
+        String a=store.bindPeer("http://computer/",first.verified(deviceId),java.util.UUID.randomUUID().toString(),new JSONArray());
+        assertEquals(id,store.list(a).get(0).getString("id"));assertEquals(a,store.activeScope());
+        String b=store.bindPeer("http://other-computer/",second.verified(deviceId),java.util.UUID.randomUUID().toString(),new JSONArray());
         assertTrue(store.list(b).isEmpty());assertEquals(1,store.list(a).size());
-        assertEquals(b,store.cachedScope("http://computer/"));
+        assertEquals(b,store.activeScope());
+    }
+
+    @Test public void samePeerAtNewAddressRetainsExactPendingMutationAndUnpairRetainsData()throws Exception{
+        TestPeer device=new TestPeer();PeerIdentity identity=device.verified(store.deviceId());
+        String scope=store.bindPeer("http://192.168.1.2/",identity,java.util.UUID.randomUUID().toString(),new JSONArray());
+        store.save(scope,null,payload("地址改变前的修改"));String before=store.mutations(scope).toString();
+        assertEquals(scope,store.bindPeer("http://192.168.1.3/",identity,java.util.UUID.randomUUID().toString(),new JSONArray()));
+        assertEquals(before,store.mutations(scope).toString());assertEquals("http://192.168.1.3/",store.activePeer().getString("origin"));
+        store.unpair(device.peerId);assertFalse(store.activePeer().getBoolean("enabled"));assertEquals(before,store.mutations(scope).toString());
+        assertEquals(1,store.list(scope).size());
+    }
+
+    @Test public void signedIdentityRejectsWrongChallengeAndChangedPinnedKey()throws Exception{
+        TestPeer original=new TestPeer();String challenge=PeerIdentity.challenge(),client=store.deviceId();
+        PeerIdentity trusted=PeerIdentity.verify(original.proof(challenge,client),challenge,client,null,null,null);
+        try{PeerIdentity.verify(original.proof(challenge,client),PeerIdentity.challenge(),client,trusted.publicKey,trusted.peerId,trusted.spaceId);fail("A replayed signed challenge must fail");}catch(SecurityException expected){}
+        TestPeer impostor=new TestPeer(original.peerId,original.spaceId);
+        try{PeerIdentity.verify(impostor.proof(challenge,client),challenge,client,trusted.publicKey,trusted.peerId,trusted.spaceId);fail("Same UUIDs with another key must fail");}catch(SecurityException expected){}
+    }
+
+    @Test public void upgradePreservesPendingPayloadAndOnlyImportsSelectedLegacyOrigin()throws Exception{
+        String space=java.util.UUID.randomUUID().toString(),origin="http://old-computer/",oldScope=origin+"|"+space,otherScope="http://forked-computer/|"+space;
+        String id=java.util.UUID.randomUUID().toString(),other=java.util.UUID.randomUUID().toString(),mutationId=java.util.UUID.randomUUID().toString();
+        JSONObject desired=payload("旧设备待同步修改"),mutation=new JSONObject().put("mutation_id",mutationId).put("id",id).put("base_version",3).put("deleted",false).put("event",new JSONObject(desired.toString()));mutation.getJSONObject("event").remove("deleted");
+        createLegacyDatabase();
+        try(android.database.sqlite.SQLiteDatabase legacy=context.openOrCreateDatabase("schedule-offline.sqlite",Context.MODE_PRIVATE,null)){
+            legacy.execSQL("INSERT INTO local_events(scope,id,payload,version,dirty,expected_base) VALUES(?,?,?,4,1,3)",new Object[]{oldScope,id,desired.toString()});
+            legacy.execSQL("INSERT INTO outbox(scope,id,mutation,desired) VALUES(?,?,?,?)",new Object[]{oldScope,id,mutation.toString(),desired.toString()});
+            legacy.execSQL("INSERT INTO local_events(scope,id,payload,version,dirty) VALUES(?,?,?,2,1)",new Object[]{otherScope,other,payload("另一来源独立修改").toString()});
+            legacy.execSQL("INSERT INTO bindings(origin,scope,email) VALUES(?,?,?)",new Object[]{origin,oldScope,"old@example.test"});
+        }
+        context.getSharedPreferences("offline-editor",Context.MODE_PRIVATE).edit().putString(oldScope+"|new",payload("未保存的旧草稿").put("base_version",3).toString()).commit();
+        store=new LocalScheduleStore(context);store.initialize(origin);TestPeer peer=new TestPeer(java.util.UUID.randomUUID().toString(),space);
+        String active=store.bindPeer("http://new-computer/",peer.verified(store.deviceId()),java.util.UUID.randomUUID().toString(),new JSONArray().put(space));
+        assertEquals(mutation.toString(),store.mutations(active).getJSONObject(0).toString());
+        assertEquals(4,store.list(active).get(0).getInt("version"));assertEquals(4,store.list(active).get(0).getInt("base_version"));
+        // The original outbox and draft baseline remain immutable legacy evidence; the new projection uses local causal history.
+        assertEquals(3,new JSONObject(context.getSharedPreferences("offline-editor",Context.MODE_PRIVATE).getString(oldScope+"|new",null)).getInt("base_version"));
+        assertTrue(store.draftScopes(active).contains(oldScope));
+        assertEquals("另一来源独立修改",store.list(otherScope).get(0).getString("title"));
+        assertFalse(store.list(active).stream().anyMatch(row->other.equals(row.optString("id"))));
+    }
+
+    @Test public void upgradeRetainsDraftOnlyBindingsAndStandaloneEditorScopes()throws Exception{
+        String space=java.util.UUID.randomUUID().toString(),origin="http://draft-only/",oldScope=origin+"|"+space,standalone="local:http://unpaired-device/";
+        createLegacyDatabase();
+        try(android.database.sqlite.SQLiteDatabase legacy=context.openOrCreateDatabase("schedule-offline.sqlite",Context.MODE_PRIVATE,null)){
+            legacy.execSQL("INSERT INTO bindings(origin,scope,email) VALUES(?,?,?)",new Object[]{origin,oldScope,"old@example.test"});
+        }
+        context.getSharedPreferences("offline-editor",Context.MODE_PRIVATE).edit().putString(oldScope+"|new",payload("旧草稿").toString()).putString(standalone+"|new",payload("未配对设备草稿").toString()).commit();
+        store=new LocalScheduleStore(context);store.initialize(origin);assertTrue(store.draftScopes(store.activeScope()).contains(oldScope));
+        assertTrue(store.spaces().stream().anyMatch(row->store.canonicalScope(standalone).equals(row.optString("scope"))));
+        TestPeer peer=new TestPeer(java.util.UUID.randomUUID().toString(),space);
+        String active=store.bindPeer("http://new-address/",peer.verified(store.deviceId()),java.util.UUID.randomUUID().toString(),new JSONArray().put(space));
+        assertTrue(store.draftScopes(active).contains(oldScope));assertNotEquals(active,store.canonicalScope(standalone));
+    }
+
+    @Test public void upgradeKeepsFormerGuestDraftWithItsOriginalLegacyDataset()throws Exception{
+        String first=java.util.UUID.randomUUID().toString(),second=java.util.UUID.randomUUID().toString();
+        String firstScope="http://first-device/|"+first,secondOrigin="http://second-device/",secondScope=secondOrigin+"|"+second;
+        createLegacyDatabase();
+        try(android.database.sqlite.SQLiteDatabase legacy=context.openOrCreateDatabase("schedule-offline.sqlite",Context.MODE_PRIVATE,null)){
+            legacy.execSQL("INSERT INTO bindings(origin,scope,email) VALUES(?,?,?),(?,?,?)",new Object[]{"http://first-device/",firstScope,"first@example.test",secondOrigin,secondScope,"second@example.test"});
+            legacy.execSQL("INSERT INTO metadata(key,value) VALUES('guest_owner',?)",new Object[]{firstScope});
+        }
+        context.getSharedPreferences("offline-editor",Context.MODE_PRIVATE).edit().putString("guest|new",payload("第一份旧数据的未保存草稿").toString()).commit();
+        store=new LocalScheduleStore(context);store.initialize(secondOrigin);TestPeer peer=new TestPeer(java.util.UUID.randomUUID().toString(),second);
+        String target=store.bindPeer("http://new-second-device/",peer.verified(store.deviceId()),java.util.UUID.randomUUID().toString(),new JSONArray().put(second));
+        assertFalse(store.draftScopes(target).contains("guest"));assertNotEquals(target,store.canonicalScope("guest"));
+        assertEquals(store.canonicalScope(firstScope),store.canonicalScope("guest"));
+        assertTrue(store.spaces().stream().anyMatch(row->store.canonicalScope(firstScope).equals(row.optString("scope"))));
+    }
+
+    private void createLegacyDatabase(){
+        store.close();context.deleteDatabase("schedule-offline.sqlite");
+        try(android.database.sqlite.SQLiteDatabase legacy=context.openOrCreateDatabase("schedule-offline.sqlite",Context.MODE_PRIVATE,null)){
+            legacy.execSQL("CREATE TABLE local_events(scope TEXT NOT NULL,id TEXT NOT NULL,payload TEXT NOT NULL,version INTEGER NOT NULL DEFAULT 0,dirty INTEGER NOT NULL DEFAULT 1,conflict TEXT,message TEXT,expected_base INTEGER,PRIMARY KEY(scope,id))");
+            legacy.execSQL("CREATE TABLE outbox(scope TEXT NOT NULL,id TEXT NOT NULL,mutation TEXT NOT NULL,desired TEXT NOT NULL,PRIMARY KEY(scope,id))");
+            legacy.execSQL("CREATE TABLE bindings(origin TEXT PRIMARY KEY,scope TEXT NOT NULL,email TEXT NOT NULL)");
+            legacy.execSQL("CREATE TABLE metadata(key TEXT PRIMARY KEY,value TEXT NOT NULL)");legacy.setVersion(2);
+        }
     }
 
     @Test public void uncertainResultRetriesIdenticalMutationAndEditsDuringUploadAreKept()throws Exception{

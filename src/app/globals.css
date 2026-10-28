@@ -3762,6 +3762,29 @@ h1 { font-weight: 500; font-size: 30px; letter-spacing: -.5px; }
 .editor-conflict p { margin-top: 10px; }
 .editor-conflict .modal-actions { flex-wrap: wrap; }
 .editor-conflict button { flex: 1 1 140px; }
+.device-connections { margin-top: 24px; }
+.device-connections-heading, .device-connection-name { display: flex; align-items: center; gap: 12px; }
+.device-connections-heading { justify-content: space-between; }
+.device-connections h3 { font-size: 16px; }
+.device-connection-row { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px; padding: 16px 0; border-bottom: 1px solid var(--border); }
+.device-connection-name { min-width: 0; }
+.device-connection-name strong { display: block; overflow-wrap: anywhere; font-size: 14px; }
+.device-connection-name small { display: block; margin-top: 4px; color: var(--muted); }
+.device-disconnect-confirm { width: 100%; font-size: 13px; }
+.device-disconnect-confirm .modal-actions { flex-wrap: wrap; }
+.peer-connect-form { margin: 14px 0 20px; }
+.peer-connect-form input, .peer-connect-form select { width: 100%; min-width: 0; }
+.device-peer-error { width: 100%; color: #9b5200; font-size: 12px; }
+.pairing-consent { margin: 16px 0; line-height: 1.8; }
+.replica-conflict-entry { display: block; margin: 10px 0; padding: 9px 12px; background: #fff4dc; border: 1px solid #e8cd94; border-radius: 9px; color: #795500; text-align: left; font-size: 12px; }
+.replica-choices { border: 0; margin: 16px 0; padding: 0; display: grid; gap: 12px; }
+.replica-choices legend { font-weight: 600; margin-bottom: 12px; }
+.replica-choice { display: flex; gap: 12px; padding: 16px; border: 1px solid var(--border); border-radius: 14px; cursor: pointer; }
+.replica-choice.is-selected { border-color: var(--accent); background: #edf3fd; }
+.replica-choice input { flex: 0 0 20px; width: 20px; height: 20px; margin-top: 3px; accent-color: var(--accent); }
+.replica-choice > span { display: grid; gap: 6px; min-width: 0; overflow-wrap: anywhere; font-size: 13px; }
+.replica-choice small { color: var(--muted); }
+.replica-resolution .modal-actions { flex-wrap: wrap; }
 @media (max-width: 680px) {
   .quick-compose { display: inline-flex; min-height: 44px; }
   .dashboard-grid .agenda-column,

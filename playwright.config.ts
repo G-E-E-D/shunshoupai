@@ -32,7 +32,8 @@ export default defineConfig({
     env: {
       APP_STORAGE: "local",
       APP_MOBILE_UI_TEST: "true",
-      APP_DB_PATH: "test-results/e2e.sqlite",
+      APP_DB_PATH: "test-results/e2e-device.sqlite",
+      APP_DEVICE_BOOTSTRAP_KEY: "test-only-device-bootstrap-key-2026",
       NEXT_DIST_DIR: ".next-e2e",
       AI_API_KEY: "",
       AI_ALLOWED_PRIVATE_HOSTS: "127.0.0.1,localhost",

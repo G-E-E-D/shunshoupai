@@ -1,4 +1,5 @@
 #pragma once
+#include "device_bootstrap.h"
 #include <QCoreApplication>
 #include <QDir>
 #include <QFileInfo>
@@ -22,10 +23,12 @@ inline QString appDataDirectory() {
 
 class BackendHost {
     QProcess process;
+    QByteArray bootstrapKey;
 #ifdef Q_OS_WIN
     HANDLE job = nullptr;
 #endif
 public:
+    QByteArray deviceBootstrapKey() const { return bootstrapKey; }
     QString start() {
         const auto root = QCoreApplication::applicationDirPath();
         const auto node = root + "/runtime/node.exe";
@@ -45,6 +48,8 @@ public:
         env.insert("APP_DB_PATH", appDataDirectory() + "/data/app.sqlite");
         env.insert("APP_ORIGIN", "");
         env.insert("COOKIE_SECURE", "false");
+        bootstrapKey = newDeviceBootstrapKey();
+        env.insert("APP_DEVICE_BOOTSTRAP_KEY", QString::fromLatin1(bootstrapKey));
         process.setProcessEnvironment(env);
         process.setWorkingDirectory(appDataDirectory());
         // No request text, cookies or model credentials are written to a log.

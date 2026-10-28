@@ -7,7 +7,7 @@ namespace shunshoupai {
 struct Connection {
     // Canonical HTTP(S) root, always ending in '/'. Safe to remember.
     std::string origin;
-    // Short-lived authorization capability. Never persist this field.
+    // Short-lived device-pairing capability. Never persist this field.
     std::string pairingToken;
 };
 

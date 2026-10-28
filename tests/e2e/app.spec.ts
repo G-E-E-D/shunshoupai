@@ -1,7 +1,6 @@
 import {
   expect,
   test,
-  type Page,
   type APIRequestContext,
 } from "@playwright/test";
 import { randomUUID } from "node:crypto";
@@ -9,8 +8,8 @@ import { mkdir } from "node:fs/promises";
 import type { EventDraft, ScheduleEvent } from "../../src/lib/types";
 import { addDays, localToIso, shanghaiDate } from "../../src/lib/time";
 import { dayLabel } from "../../src/lib/client";
+import { loadWorkbench, pairDevice, resetTestDevice } from "./device-fixtures";
 
-const password = "Synthetic-demo-password-2026";
 const example =
   "明天下午三点到四点面试，今天晚上七点到八点改简历，八点到九点准备面试。";
 const today = shanghaiDate(new Date());
@@ -19,32 +18,7 @@ const query = new URLSearchParams({
   to: localToIso(`${addDays(today, 7)}T00:00:00`),
 });
 
-async function authenticate(page: Page, email: string, register = true) {
-  const sessionLoaded = page.waitForResponse(
-    (response) =>
-      response.url().endsWith("/api/auth/session") &&
-      response.request().method() === "GET",
-  );
-  await page.goto("/");
-  await sessionLoaded;
-  await page
-    .locator("header")
-    .getByRole("button", { name: "登录账号", exact: true })
-    .click();
-  const dialog = page.getByRole("dialog");
-  if (register)
-    await dialog.getByRole("button", { name: "注册账号", exact: true }).click();
-  await dialog.getByLabel("邮箱", { exact: true }).fill(email);
-  await dialog.getByLabel("密码", { exact: true }).fill(password);
-  await dialog
-    .getByRole("button", {
-      name: register ? "创建账号" : "登录，继续安排",
-      exact: true,
-    })
-    .click();
-  await expect(dialog).not.toBeVisible();
-  await expect(page.locator(".sync-badge")).toHaveText("已同步");
-}
+test.beforeEach(async ({ page }) => { await resetTestDevice(page.request); });
 
 async function list(request: APIRequestContext): Promise<ScheduleEvent[]> {
   const response = await request.get(`/api/events?${query}`);
@@ -67,9 +41,8 @@ test("two independent devices parse, review, save, synchronize edits, complete a
   page,
   browser,
 }, testInfo) => {
-  const email = `demo-${randomUUID()}@example.com`;
   await page.setViewportSize({ width: 1440, height: 1200 });
-  await authenticate(page, email);
+  await loadWorkbench(page);
   const mobileContext = await browser.newContext({
     baseURL: "http://localhost:3001",
     viewport: { width: 360, height: 800 },
@@ -78,7 +51,8 @@ test("two independent devices parse, review, save, synchronize edits, complete a
   });
   const mobile = await mobileContext.newPage();
   try {
-    await authenticate(mobile, email, false);
+    await pairDevice(page.request, mobile.request);
+    await loadWorkbench(mobile);
     const agendaTop = await mobile.locator(".agenda-column").evaluate(element => element.getBoundingClientRect().top);
     const composerTop = await mobile.locator(".composer-card").evaluate(element => element.getBoundingClientRect().top);
     expect(agendaTop).toBeLessThan(composerTop);
@@ -192,13 +166,12 @@ test("HTTP mutations enforce idempotency, isolation, optimistic versions and sof
   page,
   browser,
 }) => {
-  await authenticate(page, `api-a-${randomUUID()}@example.com`);
+  await loadWorkbench(page);
   const otherContext = await browser.newContext({
     baseURL: "http://localhost:3001",
   });
   const other = await otherContext.newPage();
   try {
-    await authenticate(other, `api-b-${randomUUID()}@example.com`);
     const payload = {
       request_id: randomUUID(),
       events: [draft("接口验证日程")],
@@ -228,21 +201,21 @@ test("HTTP mutations enforce idempotency, isolation, optimistic versions and sof
         })
       ).status(),
     ).toBe(403);
-    expect(await list(other.request)).toHaveLength(0);
+    expect((await other.request.get(`/api/events?${query}`)).status()).toBe(401);
     expect(
       (
         await other.request.patch(`/api/events/${event.id}`, {
           data: { base_version: 1, title: "越权修改" },
         })
       ).status(),
-    ).toBe(404);
+    ).toBe(401);
     expect(
       (
         await other.request.delete(`/api/events/${event.id}`, {
           data: { base_version: 1 },
         })
       ).status(),
-    ).toBe(404);
+    ).toBe(401);
     expect(
       (
         await page.request.patch(`/api/events/${event.id}`, {
@@ -277,7 +250,7 @@ test("offline save keeps the draft unsaved and reconnect can save it exactly onc
   page,
   context,
 }) => {
-  await authenticate(page, `offline-${randomUUID()}@example.com`);
+  await loadWorkbench(page);
   await page.getByLabel("描述你的日程安排").fill("今天上午九点到十点复盘");
   await page.getByRole("button", { name: "帮我整理一下" }).click();
   await expect(page.getByText("1 项草稿，等你确认")).toBeVisible();
@@ -304,7 +277,7 @@ test("offline save keeps the draft unsaved and reconnect can save it exactly onc
 test("ambiguous input asks for a correction without persisting guesses", async ({
   page,
 }) => {
-  await authenticate(page, `clarify-${randomUUID()}@example.com`);
+  await loadWorkbench(page);
   await page.getByLabel("描述你的日程安排").fill("周五三点面试");
   await page.getByRole("button", { name: "帮我整理一下" }).click();
   await expect(page.getByText("还需要一点信息")).toBeVisible();
@@ -316,7 +289,7 @@ test("ambiguous input asks for a correction without persisting guesses", async (
 test("a lost successful save response keeps its request id and retries without duplication", async ({
   page,
 }) => {
-  await authenticate(page, `uncertain-${randomUUID()}@example.com`);
+  await loadWorkbench(page);
   await page
     .getByLabel("描述你的日程安排")
     .fill("今天下午两点到三点梳理作品集");
@@ -387,7 +360,7 @@ test("an open page follows Shanghai midnight without a hydration mismatch", asyn
 });
 
 test("reviewed and manual drafts survive refresh without being submitted", async ({ page }) => {
-  await authenticate(page, `draft-recovery-${randomUUID()}@example.com`);
+  await loadWorkbench(page);
   await page.getByLabel("描述你的日程安排").fill("今天上午九点到十点复盘");
   await page.getByRole("button", { name: "帮我整理一下" }).click();
   await expect(page.getByLabel("草稿 1 标题")).toHaveValue("复盘");
@@ -406,7 +379,7 @@ test("reviewed and manual drafts survive refresh without being submitted", async
   await expect(page.getByRole("dialog").getByLabel("结束时间", { exact: true })).toHaveValue(`${today}T15:00`);
   await page.getByRole("button", { name: "关闭弹窗", exact: true }).click();
   await page.reload();
-  await expect(page.locator(".sync-badge")).toHaveText("已同步");
+  await expect(page.locator(".sync-badge")).toHaveText("连接正常");
   await page.getByRole("button", { name: "手动添加", exact: true }).click();
   await expect(page.getByRole("dialog").getByLabel("日程标题", { exact: true })).toHaveValue("手动输入的安排");
   await expect(page.getByRole("dialog").getByLabel("开始时间", { exact: true })).toHaveValue(`${today}T14:00`);
@@ -417,8 +390,8 @@ test("reviewed and manual drafts survive refresh without being submitted", async
   await expect(page.getByRole("dialog").getByLabel("日程标题", { exact: true })).toHaveValue("");
 });
 
-test("a failed startup session request automatically recovers the existing login", async ({ page }) => {
-  await authenticate(page, `session-recovery-${randomUUID()}@example.com`);
+test("a failed startup session request automatically recovers the existing device connection", async ({ page }) => {
+  await loadWorkbench(page);
   let attempts = 0;
   await page.route("**/api/auth/session", async route => {
     attempts++;
@@ -426,14 +399,14 @@ test("a failed startup session request automatically recovers the existing login
     else await route.continue();
   });
   await page.reload();
-  await expect(page.locator(".sync-badge")).toHaveText("同步待恢复");
-  await expect(page.locator(".sync-badge")).toHaveText("已同步", { timeout: 20_000 });
-  await expect(page.getByRole("button", { name: "打开账号设置", exact: true })).toBeVisible();
+  await expect(page.locator(".sync-badge")).toHaveText("连接待恢复");
+  await expect(page.locator(".sync-badge")).toHaveText("连接正常", { timeout: 20_000 });
+  await expect(page.getByRole("button", { name: "打开设备与同步", exact: true })).toBeVisible();
   expect(attempts).toBeGreaterThanOrEqual(2);
 });
 
 test("background polling lets a slow refresh finish without discarding its result", async ({ page }) => {
-  await authenticate(page, `slow-refresh-${randomUUID()}@example.com`);
+  await loadWorkbench(page);
   await page.request.post("/api/events/commit", { data: { request_id: randomUUID(), events: [draft("慢网络仍能看到的新日程")] } });
   let attempts = 0;
   let release!: () => void;
@@ -454,7 +427,7 @@ test("background polling lets a slow refresh finish without discarding its resul
 });
 
 test("a restored edit keeps its original version until the user resolves a remote update", async ({ page }) => {
-  await authenticate(page, `editor-conflict-${randomUUID()}@example.com`);
+  await loadWorkbench(page);
   const created = await page.request.post("/api/events/commit", {
     data: { request_id: randomUUID(), events: [draft("原始安排")] },
   });

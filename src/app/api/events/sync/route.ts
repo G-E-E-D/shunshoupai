@@ -1,5 +1,5 @@
 import { syncRequestSchema } from "@/lib/sync";
-import { requireAuth } from "@/lib/server/auth";
+import { assertAuthActive, requireAuth } from "@/lib/server/auth";
 import { syncEvents } from "@/lib/server/sync";
 import { handle, rateLimit, readJson } from "@/lib/server/http";
 
@@ -10,6 +10,8 @@ export async function POST(request: Request) {
   return handle(async () => {
     const auth = await requireAuth();
     rateLimit(`sync:${auth.user.id}`, 120, 60_000);
-    return syncEvents(auth, syncRequestSchema.parse(await readJson(request)));
+    const input = syncRequestSchema.parse(await readJson(request));
+    assertAuthActive(auth);
+    return syncEvents(auth, input);
   });
 }

@@ -20,6 +20,7 @@
 #include <QMouseEvent>
 #include <QPointer>
 #include <QPushButton>
+#include <QScrollArea>
 #include <QTableWidget>
 #include <QTextEdit>
 #include <QTimer>
@@ -69,7 +70,7 @@ bool openDatePopup(QDateEdit *date) {
 int MainWindow::visualSmoke(const QString &directory) {
     // The caller must supply an isolated backend, just like --smoke-test. This
     // exercises the actual native dialogs/buttons and their API handlers. Every
-    // account/event below is a unique documentation fixture, never user data.
+    // device/event below is an isolated documentation fixture, never user data.
     QDir output(QDir(directory).absolutePath());
     if (!QDir().mkpath(output.absolutePath())) return 30;
     auto fail = [](int code, const char *message) {
@@ -87,42 +88,15 @@ int MainWindow::visualSmoke(const QString &directory) {
     auto dismissUnexpected = [] {
         queueReject(qobject_cast<QDialog *>(QApplication::activeModalWidget()));
     };
-    const QString email = "design-" + QUuid::createUuid().toString(QUuid::WithoutBraces) + "@example.com";
     show();
     QApplication::processEvents();
-
-    bool authFailed = false;
-    int authPhase = 0;
-    QTimer authController;
-    authController.setInterval(60);
-    QElapsedTimer authDeadline;
-    authDeadline.start();
-    connect(&authController, &QTimer::timeout, this, [&] {
-        if (api.busy()) return;
-        if (authDeadline.elapsed() > 20000) { authFailed = true; dismissUnexpected(); return; }
-        auto *dialog = qobject_cast<QDialog *>(QApplication::activeModalWidget());
-        if (!dialog || dialog->objectName() != "authDialog") return;
-        if (authPhase == 0) {
-            authPhase = 10;
-            if (!capture(dialog, "auth-login.png") || !control(dialog, "authRegisterTab")) { authFailed = true; queueReject(dialog); return; }
-            authPhase = 1;
-            queueClick(control(dialog, "authRegisterTab"));
-        } else if (authPhase == 1) {
-            authPhase = 11;
-            auto *emailInput = dialog->findChild<QLineEdit *>("authEmail");
-            auto *password = dialog->findChild<QLineEdit *>("authPassword");
-            auto *submit = control(dialog, "authSubmit");
-            if (!emailInput || !password || !submit || !capture(dialog, "auth-register.png")) { authFailed = true; queueReject(dialog); return; }
-            emailInput->setText(email);
-            password->setText("Native-design-test-only-2026!");
-            authPhase = 2;
-            queueClick(submit);
-        }
-    });
-    authController.start();
-    auth();
-    authController.stop();
-    if (authFailed || authPhase != 2 || owner().isEmpty()) return fail(31, "native registration dialog did not create an authenticated account");
+    initialize();
+    if (owner().isEmpty() || !session.value("local_first").toBool() || session.value("role") != "owner")
+        return fail(31, "native startup did not establish an authorized local device without login");
+    const auto deviceName = session.value("device").toObject().value("name").toString();
+    for (auto *action : findChildren<QAbstractButton *>())
+        if (action->text().contains(QString::fromUtf8("登录")) || action->text().contains(QString::fromUtf8("注册")) || action->text().contains(QString::fromUtf8("退出账号")))
+            return fail(72, "account login controls remain in the native workspace");
 
     // Open the real event editor, then its nested draft-confirmation dialog.
     // Clicks are queued outside the controller callback: eventSave opens a
@@ -345,10 +319,70 @@ int MainWindow::visualSmoke(const QString &directory) {
     if (!cloned.ok() || clonedRows.size() != 1 || clonedRows.first().toObject().value("title") != QString::fromUtf8("另存恢复的本机日程")
         || clonedRows.first().toObject().value("id") == conflictOriginal.value("id"))
         return fail(71, "deleted event recovery did not create exactly one new event");
+    const auto pairing = api.call("POST", "/api/pairing/issue");
+    if (!pairing.ok()) return fail(73, "device pairing could not be issued");
+    ApiClient pairedPhone(api.origin);
+    const auto paired = pairedPhone.call("POST", "/api/pairing/redeem", {{"token", pairing.data.value("token")},
+        {"device_id", QUuid::createUuid().toString(QUuid::WithoutBraces)}, {"device_name", QString::fromUtf8("测试手机")}, {"platform", "android"}});
+    const auto pairingId = paired.data.value("pairing_id").toString();
+    if (!paired.ok() || pairingId.isEmpty()) return fail(74, "device pairing redemption failed");
+    if (!inspectDialog("devicesDialog", "paired-devices.png", [this] { devices(); }, [pairingId](QDialog *dialog) {
+        auto *scroll = dialog->findChild<QScrollArea *>("dialogScroll");
+        auto *remove = control(dialog, "unpair-" + pairingId);
+        return remove && control(dialog, "devicesPair") && scroll && scroll->height() >= 120
+            && scroll->viewport()->rect().intersects(QRect(remove->mapTo(scroll->viewport(), QPoint(0, 0)), remove->size()));
+    })) return fail(75, "paired-device manager did not expose authorized device removal");
+    bool unpairFailed = false;
+    int unpairPhase = 0;
+    QTimer unpairController;
+    unpairController.setInterval(60);
+    QElapsedTimer unpairDeadline;
+    unpairDeadline.start();
+    connect(&unpairController, &QTimer::timeout, this, [&] {
+        if (api.busy()) return;
+        if (unpairDeadline.elapsed() > 20000) { unpairFailed = true; dismissUnexpected(); return; }
+        auto *dialog = qobject_cast<QDialog *>(QApplication::activeModalWidget());
+        if (!dialog) return;
+        if (unpairPhase == 0 && dialog->objectName() == "devicesDialog") {
+            auto *remove = control(dialog, "unpair-" + pairingId);
+            if (!remove) { unpairFailed = true; queueReject(dialog); return; }
+            unpairPhase = 1; queueClick(remove);
+        } else if (unpairPhase == 1 && dialog->objectName() == "confirmDialog") {
+            auto *proceed = control(dialog, "primary");
+            if (!proceed) { unpairFailed = true; queueReject(dialog); return; }
+            unpairPhase = 2; queueClick(proceed);
+        } else if (unpairPhase == 2 && dialog->objectName() == "devicesDialog") {
+            auto *remove = control(dialog, "unpair-" + pairingId);
+            if (remove && remove->isVisible()) { unpairFailed = true; queueReject(dialog); return; }
+            unpairPhase = 3; queueReject(dialog);
+        }
+    });
+    unpairController.start(); devices(); unpairController.stop();
+    if (unpairFailed || unpairPhase != 3 || events.size() != 1
+        || pairedPhone.call("GET", "/api/events?from=2030-01-01T00:00:00Z&to=2030-01-02T00:00:00Z").status != 401)
+        return fail(76, "unpairing did not revoke peer access while preserving local events");
+    bool migrationShown = false;
+    QTimer migrationController;
+    migrationController.setInterval(60);
+    connect(&migrationController, &QTimer::timeout, this, [&] {
+        auto *dialog = qobject_cast<QDialog *>(QApplication::activeModalWidget());
+        if (migrationShown || !dialog || dialog->objectName() != "legacySpaceDialog") return;
+        migrationShown = true;
+        auto *choice = dialog->findChild<QComboBox *>("legacySpaceChoice");
+        if (!choice || choice->count() != 2 || !control(dialog, "legacySpaceContinue")) { queueReject(dialog); return; }
+        choice->setCurrentIndex(1);
+        capture(dialog, "legacy-space-selection.png");
+        queueClick(control(dialog, "legacySpaceContinue"));
+    });
+    migrationController.start();
+    const auto selectedLegacy = chooseLegacySpace({QJsonObject{{"id", "11111111-1111-4111-8111-111111111111"}, {"label", QString::fromUtf8("旧日程一")}},
+        QJsonObject{{"id", "22222222-2222-4222-8222-222222222222"}, {"label", QString::fromUtf8("旧日程二")}}});
+    migrationController.stop();
+    if (!migrationShown || selectedLegacy != "22222222-2222-4222-8222-222222222222") return fail(77, "one-time legacy calendar choice failed");
     if (!inspectDialog("modelDialog", "model-settings.png", [this] { models(); }, [](QDialog *dialog) {
         return dialog->findChild<QLineEdit *>("modelBaseUrl") && dialog->findChild<QLineEdit *>("modelApiKey");
     })) return fail(33, "native model settings dialog failed");
-    if (!inspectDialog("phoneDialog", "phone-login.png", [this] { phone(); }, [](QDialog *dialog) {
+    if (!inspectDialog("phoneDialog", "device-pairing.png", [this] { phone(); }, [](QDialog *dialog) {
         auto *address = dialog->findChild<QComboBox *>("phoneAddress");
         if (!address) return false;
         address->setEditText("http://192.168.1.20:43127");
@@ -415,12 +449,13 @@ int MainWindow::visualSmoke(const QString &directory) {
     }
     if (accountLabel->wordWrap() || accountLabel->height() < accountLabel->fontMetrics().height()
         || accountLabel->fontMetrics().horizontalAdvance(accountLabel->text()) > accountLabel->contentsRect().width()
-        || accountLabel->toolTip() != email)
-        return fail(50, "compact account summary must fit and retain the full email in its tooltip");
+        || accountLabel->toolTip() != deviceName)
+        return fail(50, "compact device summary must fit and retain the full device name in its tooltip");
     std::cout << "PASS: 1060px header actions and single-line provider badge fit; account summary elides with full tooltip\n";
-    std::cout << "PASS: actual native login/register; event editor -> editable drafts -> saved event; model/phone/service dialogs; calendar mouse and keyboard; rendered main calendar\n";
+    std::cout << "PASS: local device opens without login/register; event editor -> editable drafts -> saved event; model/pairing/device dialogs; calendar mouse and keyboard; rendered main calendar\n";
     std::cout << "PASS: unchanged background refresh preserves native controls and focus\n";
     std::cout << "PASS: edited review rows/removals, active cell editor, pending immutability, manual new/existing drafts persist without auto-submit\n";
     std::cout << "PASS: explicit keep-local/use-remote conflict resolution and remote-deletion recovery as one new event\n";
+    std::cout << "PASS: native paired-device list and explicit revocation preserve local events; one-time legacy calendar selection\n";
     return 0;
 }

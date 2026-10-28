@@ -26,14 +26,16 @@ export const syncMutationSchema = z.object({
   "请提供完整日程，或指定要删除的已同步日程版本。");
 
 export const syncRequestSchema = z.object({
-  account_id: uuid,
+  space_id: uuid.optional(),
+  account_id: uuid.optional(), // v1.4 outbox replay compatibility only.
   mutations: z.array(syncMutationSchema).max(20),
   after: uuid.optional(),
-}).strict().refine((request) => new Set(request.mutations.map((item) => item.mutation_id)).size === request.mutations.length,
-  "同步请求编号不能重复。");
+}).strict().refine((request) => !!(request.space_id || request.account_id) && (!request.space_id || !request.account_id || request.space_id === request.account_id), "同步空间不一致。")
+  .refine((request) => new Set(request.mutations.map((item) => item.mutation_id)).size === request.mutations.length, "同步请求编号不能重复。")
+  .transform((request) => ({ ...request, account_id: (request.space_id ?? request.account_id)! }));
 
 export type SyncMutation = z.infer<typeof syncMutationSchema>;
-export type SyncRequest = z.infer<typeof syncRequestSchema>;
+export type SyncRequest = z.input<typeof syncRequestSchema>;
 export type SyncResult = {
   mutation_id: string;
   status: "applied" | "conflict";
@@ -42,6 +44,8 @@ export type SyncResult = {
   message?: string;
 };
 export type SyncResponse = {
+  peer_id?: string;
+  space_id?: string;
   results: SyncResult[];
   events: ScheduleEvent[];
   has_more: boolean;

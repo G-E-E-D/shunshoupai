@@ -1,8 +1,9 @@
 import { NextResponse } from "next/server";
 import { ZodError } from "zod";
 import { AppError } from "./errors";
+import { ReplicaError } from "../replica";
 
-const privateHeaders = { "Cache-Control": "private, no-store, max-age=0", "Vary": "Cookie" };
+const privateHeaders = { "Cache-Control": "private, no-store, max-age=0", "Vary": "Cookie, Authorization" };
 
 export function json(data: unknown, status = 200) {
   return NextResponse.json(data, { status, headers: privateHeaders });
@@ -12,6 +13,7 @@ export async function handle(operation: () => unknown | Promise<unknown>): Promi
   try {
     return json(await operation());
   } catch (error) {
+    if (error instanceof ReplicaError) return json({ error: { code: error.code, message: error.message } }, 409);
     if (error instanceof AppError) return json({ error: { code: error.code, message: error.message, details: error.details } }, error.status);
     if (error instanceof ZodError) {
       return json({ error: { code: "VALIDATION_ERROR", message: "请检查输入的字段与时间。", details: error.issues.map(({ path, message }) => ({ path, message })) } }, 400);
@@ -34,7 +36,7 @@ export function sameOrigin(request: Request) {
   if (!valid) throw new AppError("INVALID_ORIGIN", "请求来源不受信任，请从应用页面重试。", 403);
 }
 
-export async function readJson(request: Request): Promise<unknown> {
+export async function readJson(request: Request, maxBytes = 32_768): Promise<unknown> {
   sameOrigin(request);
   if (!request.headers.get("content-type")?.toLowerCase().startsWith("application/json")) {
     throw new AppError("INVALID_CONTENT_TYPE", "请求必须使用 JSON 格式。", 415);
@@ -47,7 +49,7 @@ export async function readJson(request: Request): Promise<unknown> {
     const { done, value } = await reader.read();
     if (done) break;
     size += value.byteLength;
-    if (size > 32_768) {
+    if (size > maxBytes) {
       await reader.cancel();
       throw new AppError("BODY_TOO_LARGE", "请求内容过长。", 413);
     }

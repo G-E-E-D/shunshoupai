@@ -106,7 +106,7 @@ test("pairing API schemas never accept caller-specified owners, sessions or toke
   assert.equal(pairingIssueSchema.safeParse({}).success, true);
   assert.equal(pairingIssueSchema.safeParse({ user_id: randomUUID() }).success, false);
   assert.equal(pairingIssueSchema.safeParse({ expires_at: "2099-01-01" }).success, false);
-  assert.equal(pairingRedeemSchema.safeParse({ token: randomBytes(32).toString("base64url") }).success, true);
+  assert.equal(pairingRedeemSchema.safeParse({ token: randomBytes(32).toString("base64url"), device_id: randomUUID(), device_name: "测试手机", platform: "test" }).success, true);
   assert.equal(pairingRedeemSchema.safeParse({ token: "short" }).success, false);
   assert.equal(pairingRedeemSchema.safeParse({ token: randomBytes(32).toString("base64url"), user_id: randomUUID() }).success, false);
 });

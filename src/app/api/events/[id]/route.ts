@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { deleteEventSchema, patchEventSchema } from "@/lib/schemas";
-import { requireAuth } from "@/lib/server/auth";
+import { assertAuthActive, requireAuth } from "@/lib/server/auth";
 import { getEvent, mutateEvent } from "@/lib/server/events";
 import { handle, rateLimit, readJson } from "@/lib/server/http";
 
@@ -22,6 +22,7 @@ export async function PATCH(request: Request, context: Context) {
     rateLimit(`write:${auth.user.id}`, 120, 60_000);
     const id = z.string().uuid().parse((await context.params).id);
     const { base_version, ...patch } = patchEventSchema.parse(await readJson(request));
+    assertAuthActive(auth);
     return mutateEvent(auth, id, base_version, patch);
   });
 }
@@ -32,6 +33,7 @@ export async function DELETE(request: Request, context: Context) {
     rateLimit(`write:${auth.user.id}`, 120, 60_000);
     const id = z.string().uuid().parse((await context.params).id);
     const { base_version } = deleteEventSchema.parse(await readJson(request));
+    assertAuthActive(auth);
     return mutateEvent(auth, id, base_version, {}, true);
   });
 }

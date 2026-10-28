@@ -89,15 +89,18 @@ if [ "${HAS_SIGNED_RELEASE:-false}" = 'true' ]; then
   adb uninstall com.shunshoupai.app
 fi
 
+adb forward tcp:43128 tcp:43127
 ./gradlew --no-daemon :app:connectedDebugAndroidTest \
-  -Pandroid.testInstrumentationRunnerArguments.backend_url=http://10.0.2.2:3000
+  -Pandroid.testInstrumentationRunnerArguments.backend_url=http://10.0.2.2:3000 \
+  -Pandroid.testInstrumentationRunnerArguments.callback_origin=http://127.0.0.1:43128 \
+  "-Pandroid.testInstrumentationRunnerArguments.bootstrap_key=${TEST_DEVICE_BOOTSTRAP_KEY:?Provide the isolated test backend bootstrap key}"
 
 # The UI test captures the real connected workspace. Some device/Gradle
 # configurations remove app data after instrumentation, so this extra image
 # is best-effort and cannot turn failed business assertions into a success.
 adb pull /sdcard/Android/data/com.shunshoupai.app/files/android-workspace.png \
   "$report_dir/workspace.png" || true
-for capture in android-offline-home android-offline-editor android-offline-conflict; do
+for capture in android-offline-home android-offline-editor android-offline-conflict android-devices android-peer-home android-peer-conflict; do
   adb pull "/sdcard/Android/data/com.shunshoupai.app/files/$capture.png" \
     "$report_dir/$capture.png" || true
 done

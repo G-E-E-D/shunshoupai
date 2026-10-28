@@ -26,9 +26,11 @@ int main(int argc, char **argv) {
     parser.addOption({"backend", "Connect an existing backend instead of starting the bundled one.", "url"});
     parser.addOption({"smoke-test", "Exercise the native client against an isolated test backend."});
     parser.addOption({"visual-smoke", "Exercise native dialogs and save rendered UI evidence.", "directory"});
+    parser.addOption({"peer-smoke", "Exercise native pairing and explicit conflict resolution against two isolated backends.", "directory"});
+    parser.addOption({"peer-resume-smoke", "Verify peer persistence and reconnection after both isolated backends restart.", "directory"});
     parser.addOption({"screenshot", "Save the native widget screenshot during --smoke-test.", "path"});
     parser.process(app);
-    const bool smoke = parser.isSet("smoke-test") || parser.isSet("visual-smoke");
+    const bool smoke = parser.isSet("smoke-test") || parser.isSet("visual-smoke") || parser.isSet("peer-smoke") || parser.isSet("peer-resume-smoke");
     if (smoke && !parser.isSet("backend")) return 4;
     std::unique_ptr<QTemporaryDir> smokeSettings;
     if (smoke) {
@@ -44,26 +46,32 @@ int main(int argc, char **argv) {
         return 1;
     }
     BackendHost backend;
-    QSettings settings;
     QString origin = parser.value("backend");
+    QByteArray bootstrapKey;
     if (origin.isEmpty()) {
-        origin = settings.value("service_origin", "http://127.0.0.1:43127").toString();
-        if (origin == "http://127.0.0.1:43127") {
-            const auto error = backend.start();
-            if (!error.isEmpty()) { QMessageBox::critical(nullptr, QString::fromUtf8("启动失败"), error); return 2; }
-            ApiClient readiness(origin);
-            QElapsedTimer elapsed; elapsed.start();
-            while (elapsed.elapsed() < 20000) {
-                if (readiness.call("GET", "/api/auth/session").ok()) break;
-                QThread::msleep(150);
-            }
+        origin = "http://127.0.0.1:43127";
+        const auto error = backend.start();
+        if (!error.isEmpty()) { QMessageBox::critical(nullptr, QString::fromUtf8("启动失败"), error); return 2; }
+        bootstrapKey = backend.deviceBootstrapKey();
+        ApiClient readiness(origin);
+        QElapsedTimer elapsed; elapsed.start();
+        while (elapsed.elapsed() < 20000) {
+            if (readiness.call("GET", "/api/auth/session").ok()) break;
+            QThread::msleep(150);
         }
+    } else if (isDeviceBootstrapOrigin(origin)) {
+        // Source/test operators may explicitly share a bootstrap secret with
+        // their own local server through the environment, never argv or a URL.
+        bootstrapKey = qgetenv("APP_DEVICE_BOOTSTRAP_KEY");
     }
+    qunsetenv("APP_DEVICE_BOOTSTRAP_KEY");
     QUrl validated;
     try { validated = QUrl(QString::fromStdString(shunshoupai::parseConnection(origin.toStdString(), false).origin)); }
     catch (const std::invalid_argument &) { return 3; }
     validated.setPath("");
-    MainWindow window(validated.toString(), !smoke);
+    MainWindow window(validated.toString(), !smoke, bootstrapKey, smoke ? QString::fromUtf8("本机电脑") : QString{});
+    if (parser.isSet("peer-smoke")) return window.peerSmoke(parser.value("peer-smoke"));
+    if (parser.isSet("peer-resume-smoke")) return window.peerSmoke(parser.value("peer-resume-smoke"), true);
     if (parser.isSet("visual-smoke")) return window.visualSmoke(parser.value("visual-smoke"));
     if (smoke) {
         if (!parser.isSet("backend")) return 4;

@@ -65,6 +65,7 @@ public class ConnectionInstrumentedTest {
         Context context = InstrumentationRegistry.getInstrumentation().getTargetContext();
         context.getSharedPreferences("connection", Context.MODE_PRIVATE).edit().clear().commit();
         context.getSharedPreferences("offline-editor", Context.MODE_PRIVATE).edit().clear().commit();
+        context.getSharedPreferences("device-credentials", Context.MODE_PRIVATE).edit().clear().commit();
         context.deleteDatabase("schedule-offline.sqlite");
         InstrumentationRegistry.getInstrumentation().runOnMainSync(() -> {
             CookieManager.getInstance().removeAllCookies(null);
@@ -86,6 +87,7 @@ public class ConnectionInstrumentedTest {
         scenario.onActivity(activity -> activity.findViewById(R.id.offline_connect).performClick());
         assertEquals(View.VISIBLE, read(a -> a.findViewById(R.id.setup_screen).getVisibility()).intValue());
         assertEquals("", read(a -> ((EditText) a.findViewById(R.id.server_url)).getText().toString()));
+        assertEquals(View.GONE,read(a -> a.findViewById(R.id.server_url).getVisibility()).intValue());
 
         String[] invalid = {
                 "javascript:alert(1)", "file:///sdcard/private.txt",
@@ -93,10 +95,7 @@ public class ConnectionInstrumentedTest {
                 "https://example.com#session", "https://example.com/nested-path"
         };
         for (String address : invalid) {
-            scenario.onActivity(activity -> {
-                ((EditText) activity.findViewById(R.id.server_url)).setText(address);
-                activity.findViewById(R.id.connect_button).performClick();
-            });
+            scenario.onActivity(activity -> activity.handleScanResult(address));
             assertEquals(View.VISIBLE, read(a -> a.findViewById(R.id.setup_screen).getVisibility()).intValue());
             assertTrue("Invalid service URL must produce a visible explanation: " + address,
                     read(a -> !((TextView) a.findViewById(R.id.connection_error)).getText().toString().isEmpty()));
@@ -139,25 +138,16 @@ public class ConnectionInstrumentedTest {
     }
 
     @Test
-    public void connectionFailureOffersRetryAndCanRecoverWithoutChangingServer() throws IOException {
-        fixture = new HttpFixture();
-        fixture.start();
-        scenario = ActivityScenario.launch(MainActivity.class);
-        connect(fixture.origin());
-        waitUntil("First fixture response", () -> "Fixture ready".equals(webTitle()));
-
-        int previousResponses = fixture.responses.get();
-        fixture.stop();
-        scenario.onActivity(activity -> activity.findViewById(R.id.toolbar_refresh).performClick());
-        waitUntil("Failed main document should show native retry UI",
-                () -> read(a -> a.findViewById(R.id.error_panel).getVisibility()) == View.VISIBLE);
-
-        fixture.start();
-        scenario.onActivity(activity -> activity.findViewById(R.id.error_retry).performClick());
-        waitUntil("Retry should load the same service after it recovers",
-                () -> "Fixture ready".equals(webTitle())
-                        && fixture.responses.get() > previousResponses
-                        && read(a -> a.findViewById(R.id.error_panel).getVisibility()) != View.VISIBLE);
+    public void connectionFailureKeepsLocalSchedulesAndCanRecover() throws IOException {
+        fixture=new HttpFixture();fixture.start();scenario=ActivityScenario.launch(MainActivity.class);connect(fixture.origin());
+        waitUntil("Paired fixture should render",()->"Fixture ready".equals(webTitle()));fixture.stop();
+        scenario.onActivity(activity->activity.findViewById(R.id.toolbar_refresh).performClick());
+        waitUntil("Offline smart tools should explain the unavailable device",()->read(a->a.findViewById(R.id.setup_screen).getVisibility())==View.VISIBLE);
+        assertFalse(read(a->((TextView)a.findViewById(R.id.connection_error)).getText().toString()).isEmpty());
+        scenario.onActivity(activity->activity.findViewById(R.id.cancel_connection).performClick());
+        assertEquals(View.VISIBLE,read(a->a.findViewById(R.id.offline_screen).getVisibility()).intValue());
+        fixture.start();scenario.onActivity(activity->activity.findViewById(R.id.offline_online).performClick());
+        waitUntil("The saved pair should reconnect without another QR",()->"Fixture ready".equals(webTitle()));
     }
 
     @Test
@@ -168,7 +158,9 @@ public class ConnectionInstrumentedTest {
         scenario = ActivityScenario.launch(MainActivity.class);
         connect(fixture.origin());
         waitUntil("The intentionally empty document should finish resource loading",
-                () -> read(a -> ((WebView) a.findViewById(R.id.web_view)).getProgress()) == 100);
+                () -> "Empty fixture".equals(webTitle())
+                        && read(a -> a.findViewById(R.id.web_screen).getVisibility()) == View.VISIBLE
+                        && read(a -> ((WebView) a.findViewById(R.id.web_view)).getProgress()) == 100);
         assertEquals("Resource progress 100 must keep the native loading state until visible content is ready",
                 View.VISIBLE, read(a -> a.findViewById(R.id.loading_progress).getVisibility()).intValue());
         long deadline = SystemClock.elapsedRealtime() + 30_000;
@@ -187,203 +179,76 @@ public class ConnectionInstrumentedTest {
     }
 
     @Test
-    public void olderRootOnlyServiceFallsBackOnceWithoutAnEndless404OrBlankScreen() throws IOException {
-        fixture = new HttpFixture();
-        fixture.legacyRootOnly = true;
-        fixture.start();
-        scenario = ActivityScenario.launch(MainActivity.class);
-        connect(fixture.origin());
-        waitUntil("A previous desktop version should load from its root after /mobile returns 404",
-                () -> "Fixture ready".equals(webTitle())
-                        && ServerAddress.normalize(fixture.origin()).equals(read(a -> ((WebView) a.findViewById(R.id.web_view)).getUrl()))
-                        && read(a -> a.findViewById(R.id.loading_progress).getVisibility()) != View.VISIBLE);
-        assertEquals(View.GONE, read(a -> a.findViewById(R.id.error_panel).getVisibility()).intValue());
-        assertTrue("The legacy fallback should actually contact the original root", fixture.responses.get() >= 2);
-        String capability = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
-        scenario.onActivity(activity -> activity.handleScanResult(fixture.origin() + "/#pair=" + capability));
-        waitUntil("The one-time fragment must survive only the same-origin legacy redirect",
-                () -> "true".equals(evaluate("window.receivedFragment==='#pair=" + capability + "' && location.hash===''"))
-                        && read(a -> a.findViewById(R.id.loading_progress).getVisibility()) != View.VISIBLE);
-        Context context = InstrumentationRegistry.getInstrumentation().getTargetContext();
-        assertFalse(context.getSharedPreferences("connection", Context.MODE_PRIVATE).getAll().toString().contains(capability));
+    public void pairedRootOnlyWorkspaceFallsBackWithoutForwardingThePairingToken() throws IOException {
+        fixture=new HttpFixture();fixture.legacyRootOnly=true;fixture.start();scenario=ActivityScenario.launch(MainActivity.class);connect(fixture.origin());
+        waitUntil("A paired root-only workspace should recover once",()->"Fixture ready".equals(webTitle())&&ServerAddress.normalize(fixture.origin()).equals(read(a->((WebView)a.findViewById(R.id.web_view)).getUrl()))&&read(a->a.findViewById(R.id.loading_progress).getVisibility())!=View.VISIBLE);
+        assertEquals("true",evaluate("window.receivedFragment==='' && location.hash==='"+"'"));
+        Context context=InstrumentationRegistry.getInstrumentation().getTargetContext();
+        assertFalse(context.getSharedPreferences("connection",Context.MODE_PRIVATE).getAll().toString().contains(fixture.pairToken));
     }
 
     @Test
-    public void liveBackendHydratesAndAuthenticatesInsideAndroidWebView() throws Exception {
-        String backend = InstrumentationRegistry.getArguments().getString("backend_url", "");
-        Assume.assumeFalse("Set backend_url to run the live WebView/backend integration", backend.isEmpty());
-        scenario = ActivityScenario.launch(MainActivity.class);
-        connect(ServerAddress.normalize(backend));
-        waitUntil("The actual workbench should render inside Android WebView",
-                () -> "true".equals(evaluate("Boolean(document.querySelector('header button[aria-label=\"登录账号\"]') && document.querySelector('.empty-state h3'))")));
-        evaluate("document.querySelector('header button[aria-label=\"登录账号\"]').click()");
-        waitUntil("React must hydrate: native browser click should open the login dialog",
-                () -> "true".equals(evaluate("Boolean(document.querySelector('[role=\"dialog\"]'))")));
-        evaluate("document.querySelector('button[aria-label=\"关闭弹窗\"]').click()");
-
-        String email = JSONObject.quote("android-" + UUID.randomUUID() + "@example.com");
-        String requestId = JSONObject.quote(UUID.randomUUID().toString());
-        String script = "(async () => {"
-                + "window.__androidIntegration = {done:false};"
-                + "try {"
-                + "const request = async (path, options = {}) => {"
-                + "const response = await fetch(path, {cache:'no-store',headers:{'Content-Type':'application/json'},...options});"
-                + "const data = await response.json(); if(!response.ok) throw new Error(path + ':' + response.status + ':' + JSON.stringify(data)); return data; };"
-                + "const account = await request('/api/auth/register',{method:'POST',body:JSON.stringify({email:" + email + ",password:'Android-test-only-2026!'})});"
-                + "if(!account.user) throw new Error('Registration did not create a local session');"
-                + "const parsed = await request('/api/ai/parse',{method:'POST',body:JSON.stringify({text:'明天下午三点到四点安卓面试，今天晚上七点到八点改简历，八点到九点准备面试。',timezone:'Asia/Shanghai'})});"
-                + "if(parsed.events.length!==3 || parsed.needs_clarification) throw new Error('Expected three validated drafts');"
-                + "const saved = await request('/api/events/commit',{method:'POST',body:JSON.stringify({request_id:" + requestId + ",events:parsed.events})});"
-                + "const from = parsed.events.map(event=>new Date(event.start_local+'+08:00').toISOString()).sort()[0];"
-                + "const to = parsed.events.map(event=>new Date(event.end_local+'+08:00').toISOString()).sort().at(-1);"
-                + "const query = new URLSearchParams({from,to});"
-                + "const list = await request('/api/events?'+query.toString());"
-                + "window.__androidIntegration = {done:true,eventCount:list.events.length,titles:list.events.map(event=>event.title),created:saved.events.length};"
-                + "} catch(error) {window.__androidIntegration={done:true,error:String(error)};}"
-                + "})()";
-        evaluate(script);
-        waitUntil("Same-origin WebView session should survive register, parse, commit and query",
-                () -> "true".equals(evaluate("window.__androidIntegration?.done === true")));
-        Object decoded = new JSONTokener(evaluate("JSON.stringify(window.__androidIntegration)")).nextValue();
-        JSONObject outcome = new JSONObject((String) decoded);
-        assertFalse(outcome.toString(), outcome.has("error"));
-        assertEquals(3, outcome.getInt("created"));
-        assertEquals(3, outcome.getInt("eventCount"));
-        assertTrue(outcome.getJSONArray("titles").toString().contains("安卓面试"));
-
-        scenario.onActivity(activity -> activity.findViewById(R.id.toolbar_refresh).performClick());
-        waitUntil("After reload, HttpOnly login cookies and the saved event should appear in the real UI",
-                () -> "true".equals(evaluate("Boolean(Array.from(document.querySelectorAll('.event-main h3')).find(el=>el.textContent==='改简历'))")));
-        evaluate("Array.from(document.querySelectorAll('.view-switch button')).find(el=>el.textContent==='七天').click()");
-        waitUntil("The real seven-day workbench should display all three saved events",
-                () -> "true".equals(evaluate("document.querySelectorAll('.event-main h3').length===3")));
-        evaluate("document.querySelector('header button[aria-label=\"打开账号设置\"]').click()");
-        waitUntil("Android account settings should offer personal model configuration",
-                () -> "true".equals(evaluate("Array.from(document.querySelectorAll('[role=\"dialog\"] button')).some(el=>el.textContent.trim()==='模型设置')")));
-        evaluate("Array.from(document.querySelectorAll('[role=\"dialog\"] button')).find(el=>el.textContent.trim()==='模型设置').click()");
-        waitUntil("The shared model settings form must work inside the Android client",
-                () -> "true".equals(evaluate("Boolean(document.querySelector('[role=\"dialog\"][aria-label=\"模型设置\"]')) && Array.from(document.querySelectorAll('[role=\"dialog\"] label')).some(el=>el.textContent.includes('API Key')) && Array.from(document.querySelectorAll('[role=\"dialog\"] label')).some(el=>el.textContent.includes('Base URL'))")));
-        evaluate("document.querySelector('[role=\"dialog\"][aria-label=\"模型设置\"] button[aria-label^=\"关闭\"]').click()");
-        evaluate("document.querySelector('.agenda-card').scrollIntoView({block:'start',behavior:'instant'})");
-        SystemClock.sleep(350);
+    public void liveBackendUsesPairedDeviceSessionInsideAndroidWebView() throws Exception {
+        String root=backendRoot();PairingGrant grant=pairingGrant(root,true);
+        scenario=ActivityScenario.launch(MainActivity.class);scanAndAgree(root+"#pair="+grant.token);
+        awaitPairedHome(grant.space);scenario.onActivity(activity->activity.findViewById(R.id.offline_online).performClick());
+        waitForDevice(grant.space);
+        assertEquals("true",evaluate("!document.body.innerText.includes('注册账号') && !document.querySelector('input[type=password]')"));
+        String requestId=JSONObject.quote(UUID.randomUUID().toString());
+        evaluate("(async()=>{window.__deviceIntegration={done:false};try{const request=async(path,body)=>{const r=await fetch(path,{method:body?'POST':'GET',headers:{'Content-Type':'application/json'},...(body?{body:JSON.stringify(body)}:{})});const data=await r.json();if(!r.ok)throw Error(path+':'+r.status);return data};const parsed=await request('/api/ai/parse',{text:'明天下午三点到四点安卓面试，今天晚上七点到八点改简历，八点到九点准备面试。',timezone:'Asia/Shanghai'});if(parsed.events.length!==3||parsed.needs_clarification)throw Error('Expected three drafts');const saved=await request('/api/events/commit',{request_id:"+requestId+",events:parsed.events});window.__deviceIntegration={done:true,created:saved.events.length};}catch(error){window.__deviceIntegration={done:true,error:String(error)}}})()");
+        waitUntil("Paired HttpOnly session should support parse and commit",()->"true".equals(evaluate("window.__deviceIntegration?.done===true")));
+        JSONObject result=new JSONObject((String)new JSONTokener(evaluate("JSON.stringify(window.__deviceIntegration)")).nextValue());
+        assertFalse(result.toString(),result.has("error"));assertEquals(3,result.getInt("created"));
+        assertEquals("true",evaluate("!document.cookie.includes('shunshoupai_device')"));
+        scenario.onActivity(activity->activity.findViewById(R.id.toolbar_refresh).performClick());waitForDevice(grant.space);
+        waitUntil("Reload should retain paired access and show saved events",()->"true".equals(evaluate("Array.from(document.querySelectorAll('.event-main h3')).some(el=>el.textContent==='改简历')")));
         captureWorkspaceScreenshot();
     }
 
     @Test
-    public void scannedServiceUrlUsesExistingValidationAndConnectsToTheSelectedServer() throws IOException {
-        fixture = new HttpFixture();
-        fixture.start();
-        scenario = ActivityScenario.launch(MainActivity.class);
-        scenario.onActivity(activity -> activity.findViewById(R.id.offline_connect).performClick());
-        scenario.onActivity(activity -> activity.handleScanResult("javascript:alert('not-a-service')"));
-        assertEquals(View.VISIBLE, read(a -> a.findViewById(R.id.setup_screen).getVisibility()).intValue());
-        Context context = InstrumentationRegistry.getInstrumentation().getTargetContext();
-        assertFalse("An invalid QR value must not become a remembered service",
-                context.getSharedPreferences("connection", Context.MODE_PRIVATE).contains("server_url"));
-        String capability = android.util.Base64.encodeToString(new byte[32],
-                android.util.Base64.URL_SAFE | android.util.Base64.NO_PADDING | android.util.Base64.NO_WRAP);
-        for (String invalid : new String[] {
-                fixture.origin() + "/#pair=short",
-                fixture.origin() + "/#pair=" + capability + "&extra=1",
-                fixture.origin() + "/nested#pair=" + capability,
-                fixture.origin() + "/?token=other#pair=" + capability,
-                fixture.origin() + "/#other=" + capability
-        }) {
-            scenario.onActivity(activity -> activity.handleScanResult(invalid));
-            assertFalse("Rejected pairing QR data must not be remembered",
-                    context.getSharedPreferences("connection", Context.MODE_PRIVATE).contains("server_url"));
-        }
-        ScannedConnection parsed = ScannedConnection.parse(fixture.origin() + "/#pair=" + capability);
-        assertTrue(parsed.hasPairing);
-        assertEquals(ServerAddress.normalize(fixture.origin()), parsed.serviceRoot);
-        assertEquals(parsed.serviceRoot + "#pair=" + capability, parsed.initialUrl);
-        scenario.onActivity(activity -> activity.handleScanResult(fixture.origin()));
-        waitUntil("A valid scanned URL should connect without manually retyping it",
-                () -> "Fixture ready".equals(webTitle()));
-        assertEquals(View.GONE, read(a -> a.findViewById(R.id.setup_screen).getVisibility()).intValue());
-        assertTrue(context.getSharedPreferences("connection", Context.MODE_PRIVATE)
-                .getString("server_url", "").startsWith(fixture.origin()));
+    public void decliningSharingConsentNeverRedeemsOrSendsLocalSchedules() throws IOException {
+        fixture=new HttpFixture();fixture.start();scenario=ActivityScenario.launch(MainActivity.class);
+        scenario.onActivity(activity->activity.handleScanResult(fixture.origin()+"/#pair="+fixture.pairToken));
+        waitUntil("The sharing notice must include transitive copies and model-key boundary",()->{
+            android.view.accessibility.AccessibilityNodeInfo root=InstrumentationRegistry.getInstrumentation().getUiAutomation().getRootInActiveWindow();
+            return root!=null&&!root.findAccessibilityNodeInfosByText("模型密钥和设置不会传播").isEmpty();
+        });
+        clickDialogButton("取消");assertEquals(0,fixture.redeems.get());assertTrue(fixture.receivedRevisions.isEmpty());assertTrue(fixture.authorizations.isEmpty());
     }
 
     @Test
-    public void liveBackendPairingQrCreatesSameAccountSessionWithoutTypingPasswordInWebView() throws Exception {
-        String backend = InstrumentationRegistry.getArguments().getString("backend_url", "");
-        Assume.assumeFalse("Set backend_url to run the live pairing integration", backend.isEmpty());
-        String root = ServerAddress.normalize(backend);
-        // This independent HTTP client stands in for the already-authenticated
-        // desktop. Its cookie is never inserted into the Android WebView.
-        HttpURLConnection registration = (HttpURLConnection) new URL(root + "api/auth/register").openConnection();
-        registration.setRequestMethod("POST");
-        registration.setDoOutput(true);
-        registration.setConnectTimeout(10_000);
-        registration.setReadTimeout(10_000);
-        registration.setRequestProperty("Content-Type", "application/json");
-        JSONObject account = new JSONObject().put("email", "pair-android-" + UUID.randomUUID() + "@example.com")
-                .put("password", "Pair-test-only-2026!");
-        registration.getOutputStream().write(account.toString().getBytes(StandardCharsets.UTF_8));
-        assertEquals(200, registration.getResponseCode());
-        JSONObject owner;
-        try (BufferedReader reader = new BufferedReader(new InputStreamReader(registration.getInputStream(), StandardCharsets.UTF_8))) {
-            StringBuilder body = new StringBuilder();
-            for (String line; (line = reader.readLine()) != null;) body.append(line);
-            owner = new JSONObject(body.toString()).getJSONObject("user");
-        }
-        String desktopCookie = registration.getHeaderField("Set-Cookie");
-        assertNotNull("The desktop must have its own session", desktopCookie);
-        desktopCookie = desktopCookie.split(";", 2)[0];
-        registration.disconnect();
+    public void scannedAddressRequiresExplicitPairingAndBlankWebPageCannotBlockPairing() throws IOException {
+        fixture=new HttpFixture();fixture.blankPage=true;fixture.start();scenario=ActivityScenario.launch(MainActivity.class);
+        scenario.onActivity(activity->activity.findViewById(R.id.offline_connect).performClick());
+        scenario.onActivity(activity->activity.handleScanResult(fixture.origin()));
+        assertEquals(0,fixture.redeems.get());
+        String[] invalid={"javascript:alert(1)",fixture.origin()+"/#pair=short",fixture.origin()+"/#pair="+fixture.pairToken+"&extra=1",fixture.origin()+"/nested#pair="+fixture.pairToken};
+        for(String value:invalid)scenario.onActivity(activity->activity.handleScanResult(value));
+        assertEquals(0,fixture.redeems.get());
+        scanAndAgree(fixture.origin()+"/#pair="+fixture.pairToken);awaitPairedHome(fixture.identity.spaceId);
+        assertEquals("Pairing must not request or wait for any WebView document",0,fixture.mobileRequests.get());
+    }
 
-        String desktopEventId=UUID.randomUUID().toString();
-        JSONObject computerEvent=new JSONObject().put("title","电脑已有日程").put("start_local","2026-10-27T10:00:00").put("end_local","2026-10-27T11:00:00").put("timezone","Asia/Shanghai").put("status","planned");
-        syncRequest(root,desktopCookie,owner.getString("id"),new org.json.JSONArray().put(new JSONObject().put("mutation_id",UUID.randomUUID().toString()).put("id",desktopEventId).put("base_version",0).put("deleted",false).put("event",computerEvent)));
-        String phoneEventId;
-        try(LocalScheduleStore local=new LocalScheduleStore(InstrumentationRegistry.getInstrumentation().getTargetContext())) {
-            phoneEventId=local.save("guest",null,LocalScheduleStore.payload("手机离线先记的日程",java.time.LocalDateTime.of(2026,10,27,10,30),java.time.LocalDateTime.of(2026,10,27,11,30),"planned",false));
-        }
-
-        HttpURLConnection issuing = (HttpURLConnection) new URL(root + "api/pairing/issue").openConnection();
-        issuing.setRequestMethod("POST");
-        issuing.setDoOutput(true);
-        issuing.setConnectTimeout(10_000);
-        issuing.setReadTimeout(10_000);
-        issuing.setRequestProperty("Content-Type", "application/json");
-        issuing.setRequestProperty("Cookie", desktopCookie);
-        issuing.getOutputStream().write("{}".getBytes(StandardCharsets.UTF_8));
-        assertEquals(200, issuing.getResponseCode());
-        String token;
-        try (BufferedReader reader = new BufferedReader(new InputStreamReader(issuing.getInputStream(), StandardCharsets.UTF_8))) {
-            StringBuilder body = new StringBuilder();
-            for (String line; (line = reader.readLine()) != null;) body.append(line);
-            token = new JSONObject(body.toString()).getString("token");
-        }
-        issuing.disconnect();
-        assertTrue("The QR contains a bounded random capability", token.matches("[A-Za-z0-9_-]{43}"));
-
-        scenario = ActivityScenario.launch(MainActivity.class);
-        scenario.onActivity(activity -> activity.handleScanResult(root + "#pair=" + token));
-        awaitPairedHome(owner.getString("id"));
-        try(LocalScheduleStore local=new LocalScheduleStore(InstrumentationRegistry.getInstrumentation().getTargetContext())) {
-            java.util.List<JSONObject> merged=local.list(root+"|"+owner.getString("id"));
-            assertEquals("Both devices' overlapping but independent schedules must be retained",2,merged.size());
-            assertTrue(merged.stream().anyMatch(event->desktopEventId.equals(event.optString("id"))));
-            assertTrue(merged.stream().anyMatch(event->phoneEventId.equals(event.optString("id"))&&!event.optBoolean("dirty")));
-        }
-        org.json.JSONArray mergedServer=syncRequest(root,desktopCookie,owner.getString("id"),new org.json.JSONArray()).getJSONArray("events");
-        assertEquals("The independently authenticated desktop must see the phone's offline event",2,mergedServer.length());
-        waitUntil("Scanning the QR should redeem it and show the authenticated workbench",
-                () -> "true".equals(evaluate("Boolean(document.querySelector('header button[aria-label=\"打开账号设置\"]'))")));
-        evaluate("window.__androidPairingCheck=null; fetch('/api/auth/session',{cache:'no-store'}).then(r=>r.json()).then(value=>window.__androidPairingCheck=value)");
-        waitUntil("The paired WebView must have an independent authenticated session",
-                () -> "true".equals(evaluate("Boolean(window.__androidPairingCheck?.user)")));
-        Object decoded = new JSONTokener(evaluate("JSON.stringify(window.__androidPairingCheck)")).nextValue();
-        JSONObject mobileSession = new JSONObject((String) decoded);
-        assertEquals(owner.getString("id"), mobileSession.getJSONObject("user").getString("id"));
-        assertEquals(owner.getString("email"), mobileSession.getJSONObject("user").getString("email"));
-        Context context = InstrumentationRegistry.getInstrumentation().getTargetContext();
-        assertEquals(root, context.getSharedPreferences("connection", Context.MODE_PRIVATE).getString("server_url", ""));
-        assertFalse("Pairing token must not enter Android connection preferences",
-                context.getSharedPreferences("connection", Context.MODE_PRIVATE).getAll().toString().contains(token));
-        assertEquals("true", evaluate("window.location.hash === ''"));
+    @Test
+    public void liveBackendPairingMergesIndependentSchedulesAndRevocationKeepsLocalData() throws Exception {
+        String root=backendRoot();PairingGrant grant=pairingGrant(root,true);
+        String desktopEvent=UUID.randomUUID().toString();
+        JSONObject event=new JSONObject().put("title","电脑先记的日程").put("start_local","2026-10-28T10:00:00").put("end_local","2026-10-28T11:00:00").put("timezone","Asia/Shanghai").put("status","planned").put("deleted",false);
+        JSONObject revision=AncestryReplica.createRevision(new org.json.JSONArray(),UUID.randomUUID().toString(),event,"测试电脑",System.currentTimeMillis());
+        replicaRequest(root,grant.cookie,grant.device,new org.json.JSONArray().put(new JSONObject().put("id",desktopEvent).put("heads",new org.json.JSONArray().put(revision))),null);
+        String phoneEvent;
+        try(LocalScheduleStore local=new LocalScheduleStore(InstrumentationRegistry.getInstrumentation().getTargetContext())){phoneEvent=local.save("guest",null,LocalScheduleStore.payload("手机独立安排",java.time.LocalDateTime.of(2026,10,28,10,30),java.time.LocalDateTime.of(2026,10,28,11,30),"planned",false));}
+        scenario=ActivityScenario.launch(MainActivity.class);scanAndAgree(root+"#pair="+grant.token);awaitPairedHome(grant.space);
+        waitUntil("Native pairing must merge both sides without loading a WebView",()->{
+            try(LocalScheduleStore local=new LocalScheduleStore(InstrumentationRegistry.getInstrumentation().getTargetContext())){java.util.List<JSONObject> rows=local.list(local.activeScope());return rows.stream().filter(row->!row.optBoolean("deleted")).count()==2&&rows.stream().noneMatch(row->row.optBoolean("dirty"));}catch(Exception e){return false;}
+        });
+        org.json.JSONArray synced=allReplicaRecords(root,grant.cookie,grant.device);int live=0;for(int i=0;i<synced.length();i++){org.json.JSONArray heads=synced.getJSONObject(i).getJSONArray("heads");for(int j=0;j<heads.length();j++)if(!heads.getJSONObject(j).getJSONObject("payload").getBoolean("deleted")){live++;break;}}assertEquals(2,live);
+        Context context=InstrumentationRegistry.getInstrumentation().getTargetContext();JSONObject paired;
+        try(LocalScheduleStore local=new LocalScheduleStore(context)){paired=local.peers().get(0);assertTrue(local.list(local.primaryScope()).stream().anyMatch(row->phoneEvent.equals(row.optString("id"))));}
+        apiRequest(root,"api/devices/"+paired.getString("pairing_id"),"DELETE",grant.cookie,null,null);
+        scenario.moveToState(Lifecycle.State.CREATED);scenario.moveToState(Lifecycle.State.RESUMED);
+        waitUntil("Revoked device capability should stop future synchronization",()->{try(LocalScheduleStore local=new LocalScheduleStore(context)){return !local.peer(paired.getString("peer_id")).getBoolean("enabled");}catch(Exception e){return false;}});
+        try(LocalScheduleStore local=new LocalScheduleStore(context)){assertEquals(2,local.list(local.activeScope()).stream().filter(row->!row.optBoolean("deleted")).count());}
     }
 
     @Test
@@ -413,117 +278,112 @@ public class ConnectionInstrumentedTest {
     }
 
     @Test
-    public void sameOriginRescanSwitchesAccountUsingTheOriginalWebViewAndSurvivesForegroundAndRefresh() throws Exception {
-        String backend = InstrumentationRegistry.getArguments().getString("backend_url", "");
-        Assume.assumeFalse("Set backend_url for the camera-return regression", backend.isEmpty());
-        String root = ServerAddress.normalize(backend);
-        scenario = ActivityScenario.launch(MainActivity.class);
-        connect(root);
-        waitUntil("The original Java WebView must show a hydrated mobile workspace",
-                () -> "true".equals(evaluate("document.documentElement.getAttribute('data-shunshoupai-ready')==='true'")));
-        WebView original = read(a -> (WebView) a.findViewById(R.id.web_view));
-        PairingGrant first = pairingGrant(root);
-        scenario.onActivity(activity -> activity.handleScanResult(root + "#pair=" + first.token));
-        awaitPairedHome(first.owner);
-        waitForAccount(first.owner);
-        assertTrue("Scanning must reuse the original XML WebView compositor", original == read(a -> a.findViewById(R.id.web_view)));
-        PairingGrant second = pairingGrant(root);
-        // Exercise the actual ScanContract/CaptureActivity pause/resume path.
-        // Camera decoding itself is not asserted on a camera-less emulator.
-        Instrumentation instrumentation = InstrumentationRegistry.getInstrumentation();
-        ParcelFileDescriptor descriptor = instrumentation.getUiAutomation().executeShellCommand("pm grant com.shunshoupai.app android.permission.CAMERA");
-        try (ParcelFileDescriptor.AutoCloseInputStream permissionOutput = new ParcelFileDescriptor.AutoCloseInputStream(descriptor)) {
-            while (permissionOutput.read() != -1) { /* Wait for grant completion. */ }
-        }
-        Instrumentation.ActivityMonitor cameraMonitor = instrumentation.addMonitor(QrCaptureActivity.class.getName(), null, false);
-        try {
-            scenario.onActivity(activity -> activity.findViewById(R.id.toolbar_settings).performClick());
-            scenario.onActivity(activity -> activity.findViewById(R.id.scan_button).performClick());
-            Activity capture = instrumentation.waitForMonitorWithTimeout(cameraMonitor, 10_000);
-            assertNotNull("The native scan button must launch the real camera Activity", capture);
-            instrumentation.runOnMainSync(capture::finish);
-        } finally { instrumentation.removeMonitor(cameraMonitor); }
-        scenario.onActivity(activity -> activity.handleScanResult(root + "#pair=" + second.token));
-        awaitPairedHome(second.owner);
-        waitForAccount(second.owner);
-        scenario.moveToState(Lifecycle.State.CREATED);
-        scenario.moveToState(Lifecycle.State.RESUMED);
-        scenario.onActivity(activity -> activity.findViewById(R.id.toolbar_refresh).performClick());
-        waitForAccount(second.owner);
-        assertTrue("Same-service login and foreground return must retain the original WebView",
-                original == read(a -> a.findViewById(R.id.web_view)));
-        assertEquals("true", evaluate("location.pathname==='/mobile' && location.hash===''"));
-        assertEquals(View.GONE, read(a -> a.findViewById(R.id.error_panel).getVisibility()).intValue());
+    public void rescanAtNewAddressKeepsPendingRevisionAndNeverSendsOldBearer() throws Exception {
+        fixture=new HttpFixture();fixture.start();scenario=ActivityScenario.launch(MainActivity.class);
+        scanAndAgree(fixture.origin()+"/#pair="+fixture.pairToken);awaitPairedHome(fixture.identity.spaceId);
+        scenario.moveToState(Lifecycle.State.CREATED);String oldToken=fixture.deviceToken;
+        Context context=InstrumentationRegistry.getInstrumentation().getTargetContext();String pending,scope;
+        try(LocalScheduleStore local=new LocalScheduleStore(context)){scope=local.primaryScope();local.save(scope,null,LocalScheduleStore.payload("换地址后继续合并",java.time.LocalDateTime.of(2026,10,28,12,0),java.time.LocalDateTime.of(2026,10,28,13,0),"planned",false));pending=local.replica().page(null).getJSONArray("records").getJSONObject(0).getJSONArray("heads").getJSONObject(0).getString("revision_id");}
+        fixture.changeAddress();fixture.authorizations.clear();scenario.moveToState(Lifecycle.State.RESUMED);
+        scanAndAgree(fixture.origin()+"/#pair="+fixture.pairToken);awaitPairedHome(fixture.identity.spaceId);
+        waitUntil("The pending revision must survive address and capability rotation",()->fixture.receivedRevisions.contains(pending));
+        assertFalse("New address must never receive the previous long-lived capability",fixture.authorizations.contains("Bearer "+oldToken));
+        assertEquals(scope,read(a->((OfflineScheduleView)a.findViewById(R.id.offline_screen)).scope()));
+        try(LocalScheduleStore local=new LocalScheduleStore(context)){assertEquals(ServerAddress.normalize(fixture.origin()),local.peer(fixture.identity.peerId).getString("origin"));}
     }
 
-    private void waitForAccount(String owner) {
-        waitUntil("The newly scanned account should replace the previous cookie and hydrate",
-                () -> "true".equals(evaluate("(function(){if(!window.__rescanFetching){window.__rescanFetching=true;fetch('/api/auth/session',{cache:'no-store'}).then(function(r){return r.json()}).then(function(s){window.__rescanOwner=s.user?s.user.id:'';window.__rescanFetching=false}).catch(function(){window.__rescanFetching=false})}return document.documentElement.getAttribute('data-shunshoupai-ready')==='true' && window.__rescanOwner===" + JSONObject.quote(owner) + "})()"))
-                        && read(a -> a.findViewById(R.id.loading_progress).getVisibility()) != View.VISIBLE);
+    @Test
+    public void sameIdsWithAnotherSigningKeyCannotReceiveCredentialsOrLocalChanges() throws Exception {
+        fixture=new HttpFixture();fixture.start();scenario=ActivityScenario.launch(MainActivity.class);
+        scanAndAgree(fixture.origin()+"/#pair="+fixture.pairToken);awaitPairedHome(fixture.identity.spaceId);
+        scenario.moveToState(Lifecycle.State.CREATED);String peer=fixture.identity.peerId,space=fixture.identity.spaceId;
+        fixture.changeAddress();fixture.identity=new TestPeer(peer,space);fixture.authorizations.clear();int redeemed=fixture.redeems.get();
+        scenario.moveToState(Lifecycle.State.RESUMED);scanAndAgree(fixture.origin()+"/#pair="+fixture.pairToken);
+        waitUntil("A mismatching pinned key must visibly reject the new address",()->read(a->((TextView)a.findViewById(R.id.connection_error)).getText().toString()).contains("身份"));
+        assertEquals(redeemed,fixture.redeems.get());assertTrue(fixture.authorizations.isEmpty());
+        scenario.onActivity(activity->activity.findViewById(R.id.cancel_connection).performClick());
+        assertEquals(View.VISIBLE,read(a->a.findViewById(R.id.offline_screen).getVisibility()).intValue());
     }
 
-    private void awaitPairedHome(String owner) {
-        waitUntil("QR login should bind the local account and return to the independent schedule",
-            () -> read(a -> ((OfflineScheduleView)a.findViewById(R.id.offline_screen)).scope().endsWith("|"+owner)
-                && a.findViewById(R.id.offline_screen).getVisibility()==View.VISIBLE));
-        scenario.onActivity(activity -> activity.findViewById(R.id.offline_online).performClick());
+    @Test
+    public void cancellingPairingRevokesTheDeviceAndKeepsNativeSchedules() throws Exception {
+        fixture=new HttpFixture();fixture.start();scenario=ActivityScenario.launch(MainActivity.class);
+        scanAndAgree(fixture.origin()+"/#pair="+fixture.pairToken);awaitPairedHome(fixture.identity.spaceId);
+        Context context=InstrumentationRegistry.getInstrumentation().getTargetContext();
+        try(LocalScheduleStore local=new LocalScheduleStore(context)){local.save(local.activeScope(),null,LocalScheduleStore.payload("取消配对仍保留",java.time.LocalDateTime.of(2026,10,28,16,0),java.time.LocalDateTime.of(2026,10,28,17,0),"planned",false));}
+        scenario.onActivity(activity->activity.findViewById(R.id.offline_connect).performClick());
+        SystemClock.sleep(300);captureScreenshot("android-devices.png");
+        scenario.onActivity(activity->{android.view.ViewGroup rows=activity.findViewById(R.id.peer_rows);assertTrue(rows.getChildCount()>=2);rows.getChildAt(1).performClick();});
+        waitUntil("The native confirmation should be actionable",()->{
+            android.view.accessibility.AccessibilityNodeInfo root=InstrumentationRegistry.getInstrumentation().getUiAutomation().getRootInActiveWindow();
+            if(root!=null)for(android.view.accessibility.AccessibilityNodeInfo node:root.findAccessibilityNodeInfosByText("取消配对"))if("取消配对".contentEquals(node.getText()==null?"":node.getText())&&node.isClickable())return node.performAction(android.view.accessibility.AccessibilityNodeInfo.ACTION_CLICK);
+            return false;
+        });
+        waitUntil("The paired peer should receive capability revocation",()->"revoked".equals(fixture.deviceToken));
+        try(LocalScheduleStore local=new LocalScheduleStore(context)){assertFalse(local.peer(fixture.identity.peerId).getBoolean("enabled"));assertTrue(local.list(local.primaryScope()).stream().anyMatch(row->"取消配对仍保留".equals(row.optString("title"))));}
     }
 
-    private JSONObject syncRequest(String root,String cookie,String account,org.json.JSONArray mutations)throws Exception {
-        HttpURLConnection request=(HttpURLConnection)new URL(root+"api/events/sync").openConnection();
-        request.setRequestMethod("POST");request.setDoOutput(true);request.setConnectTimeout(10000);request.setReadTimeout(10000);request.setRequestProperty("Content-Type","application/json");request.setRequestProperty("Cookie",cookie);
-        try {
-            try(java.io.OutputStream output=request.getOutputStream()){output.write(new JSONObject().put("account_id",account).put("mutations",mutations).toString().getBytes(StandardCharsets.UTF_8));}
-            assertEquals(200,request.getResponseCode());
-            try(BufferedReader reader=new BufferedReader(new InputStreamReader(request.getInputStream(),StandardCharsets.UTF_8))){StringBuilder body=new StringBuilder();for(String line;(line=reader.readLine())!=null;)body.append(line);return new JSONObject(body.toString());}
+    private String backendRoot(){String root=InstrumentationRegistry.getArguments().getString("backend_url","");String key=InstrumentationRegistry.getArguments().getString("bootstrap_key","");Assume.assumeFalse("Live device tests need an isolated backend and injected test bootstrap key",root.isEmpty()||key.isEmpty());return ServerAddress.normalize(root);}
+    private void waitForDevice(String space){waitUntil("WebView should restore the paired device through HttpOnly cookies",()->"true".equals(evaluate("(function(){if(!window.__checkingDevice){window.__checkingDevice=true;fetch('/api/devices/info').then(r=>r.json()).then(s=>{window.__deviceSpace=s.space_id;window.__checkingDevice=false}).catch(()=>window.__checkingDevice=false)}return document.documentElement.getAttribute('data-shunshoupai-ready')==='true'&&window.__deviceSpace==="+JSONObject.quote(space)+"})()")));}
+    private void awaitPairedHome(String remoteSpace){waitUntil("QR pairing should preserve the local primary calendar and register a separate peer",()->read(activity->{try(LocalScheduleStore local=new LocalScheduleStore(activity)){return ((OfflineScheduleView)activity.findViewById(R.id.offline_screen)).scope().equals(local.primaryScope())&&activity.findViewById(R.id.offline_screen).getVisibility()==View.VISIBLE&&local.peers().stream().anyMatch(peer->remoteSpace.equals(peer.optString("space_id"))&&peer.optBoolean("enabled"));}catch(Exception error){return false;}}));}
+    private JSONObject replicaRequest(String root,String cookie,String device,org.json.JSONArray records,String after)throws Exception{
+        JSONObject body=new JSONObject().put("device_id",device).put("records",records);if(after!=null)body.put("after",after);
+        return apiRequest(root,"api/replica/exchange","POST",cookie,body,null).body;
+    }
+    private org.json.JSONArray allReplicaRecords(String root,String cookie,String device)throws Exception{
+        org.json.JSONArray result=new org.json.JSONArray();String after=null;
+        do{JSONObject page=replicaRequest(root,cookie,device,new org.json.JSONArray(),after);org.json.JSONArray records=page.getJSONArray("records");for(int i=0;i<records.length();i++)result.put(records.getJSONObject(i));after=page.getBoolean("has_more")?page.getString("next_cursor"):null;}while(after!=null);
+        return result;
+    }
+    private static final class HttpResult{final JSONObject body;final String cookie;HttpResult(JSONObject body,String cookie){this.body=body;this.cookie=cookie;}}
+    private HttpResult apiRequest(String root,String path,String method,String cookie,JSONObject body,String bootstrap)throws Exception{
+        HttpURLConnection request=(HttpURLConnection)new URL(root+path).openConnection();request.setRequestMethod(method);request.setConnectTimeout(10000);request.setReadTimeout(10000);request.setRequestProperty("Content-Type","application/json");
+        if(cookie!=null)request.setRequestProperty("Cookie",cookie);if(bootstrap!=null)request.setRequestProperty("X-Device-Bootstrap",bootstrap);
+        try{if(body!=null){request.setDoOutput(true);try(java.io.OutputStream out=request.getOutputStream()){out.write(body.toString().getBytes(StandardCharsets.UTF_8));}}
+            assertEquals(path,200,request.getResponseCode());String resultCookie=null;
+            for(java.util.Map.Entry<String,java.util.List<String>> header:request.getHeaderFields().entrySet())if(header.getKey()!=null&&header.getKey().equalsIgnoreCase("Set-Cookie"))for(String value:header.getValue())if(value.startsWith("shunshoupai_device="))resultCookie=value.split(";",2)[0];
+            try(BufferedReader reader=new BufferedReader(new InputStreamReader(request.getInputStream(),StandardCharsets.UTF_8))){StringBuilder json=new StringBuilder();for(String line;(line=reader.readLine())!=null;)json.append(line);return new HttpResult(new JSONObject(json.toString()),resultCookie);}
         }finally{request.disconnect();}
     }
-
-    private static final class PairingGrant {
-        final String owner, token;
-        PairingGrant(String owner, String token) { this.owner = owner; this.token = token; }
-    }
-
-    private PairingGrant pairingGrant(String root) throws Exception {
-        HttpURLConnection registering = (HttpURLConnection) new URL(root + "api/auth/register").openConnection();
-        registering.setRequestMethod("POST"); registering.setDoOutput(true);
-        registering.setConnectTimeout(10_000); registering.setReadTimeout(10_000);
-        registering.setRequestProperty("Content-Type", "application/json");
-        JSONObject account = new JSONObject().put("email", "rescan-" + UUID.randomUUID() + "@example.com").put("password", "Rescan-test-only-2026!");
-        registering.getOutputStream().write(account.toString().getBytes(StandardCharsets.UTF_8));
-        assertEquals(200, registering.getResponseCode());
-        String owner;
-        try (BufferedReader reader = new BufferedReader(new InputStreamReader(registering.getInputStream(), StandardCharsets.UTF_8))) {
-            StringBuilder value = new StringBuilder();
-            for (String line; (line = reader.readLine()) != null;) value.append(line);
-            owner = new JSONObject(value.toString()).getJSONObject("user").getString("id");
+    private static final class PairingGrant{final String space,token,cookie,device;PairingGrant(String space,String token,String cookie,String device){this.space=space;this.token=token;this.cookie=cookie;this.device=device;}}
+    private PairingGrant pairingGrant(String root,boolean cleanup)throws Exception{
+        String key=InstrumentationRegistry.getArguments().getString("bootstrap_key","");
+        HttpResult owner=apiRequest(root,"api/devices/bootstrap","POST",null,new JSONObject().put("name","Android test desktop").put("platform","test"),key);
+        String space=owner.body.getString("space_id"),device=owner.body.getJSONObject("device").getString("id");assertNotNull(owner.cookie);
+        if(cleanup){org.json.JSONArray all=allReplicaRecords(root,owner.cookie,device),batch=new org.json.JSONArray();
+            for(int i=0;i<all.length();i++){
+                JSONObject event=all.getJSONObject(i);org.json.JSONArray heads=event.getJSONArray("heads");boolean live=false;
+                for(int j=0;j<heads.length();j++)if(!heads.getJSONObject(j).getJSONObject("payload").getBoolean("deleted"))live=true;
+                if(!live)continue;JSONObject deleted=new JSONObject(heads.getJSONObject(0).getJSONObject("payload").toString()).put("deleted",true);
+                JSONObject revision=AncestryReplica.createRevision(heads,UUID.randomUUID().toString(),deleted,"隔离测试清理",System.currentTimeMillis());
+                batch.put(new JSONObject().put("id",event.getString("id")).put("heads",new org.json.JSONArray().put(revision)));
+                if(batch.length()==50){replicaRequest(root,owner.cookie,device,batch,null);batch=new org.json.JSONArray();}
+            }
+            if(batch.length()>0)replicaRequest(root,owner.cookie,device,batch,null);
         }
-        String cookie = registering.getHeaderField("Set-Cookie").split(";", 2)[0];
-        registering.disconnect();
-        HttpURLConnection issuing = (HttpURLConnection) new URL(root + "api/pairing/issue").openConnection();
-        issuing.setRequestMethod("POST"); issuing.setDoOutput(true);
-        issuing.setConnectTimeout(10_000); issuing.setReadTimeout(10_000);
-        issuing.setRequestProperty("Content-Type", "application/json"); issuing.setRequestProperty("Cookie", cookie);
-        issuing.getOutputStream().write("{}".getBytes(StandardCharsets.UTF_8));
-        assertEquals(200, issuing.getResponseCode());
-        String token;
-        try (BufferedReader reader = new BufferedReader(new InputStreamReader(issuing.getInputStream(), StandardCharsets.UTF_8))) {
-            StringBuilder value = new StringBuilder();
-            for (String line; (line = reader.readLine()) != null;) value.append(line);
-            token = new JSONObject(value.toString()).getString("token");
-        }
-        issuing.disconnect();
-        return new PairingGrant(owner, token);
+        JSONObject issued=apiRequest(root,"api/pairing/issue","POST",owner.cookie,new JSONObject(),null).body;return new PairingGrant(space,issued.getString("token"),owner.cookie,device);
     }
-
-    private void connect(String origin) {
-        scenario.onActivity(activity -> {
-            activity.findViewById(R.id.offline_connect).performClick();
-            ((EditText) activity.findViewById(R.id.server_url)).setText(origin);
-            activity.findViewById(R.id.connect_button).performClick();
+    private void connect(String origin){scanAndAgree(ServerAddress.normalize(origin)+"#pair="+fixture.pairToken);awaitPairedHome(fixture.identity.spaceId);scenario.onActivity(activity->activity.findViewById(R.id.offline_online).performClick());}
+    private void scanAndAgree(String link) {
+        scenario.onActivity(activity->{try {
+            java.lang.reflect.Field hostField=MainActivity.class.getDeclaredField("deviceHost"),syncField=MainActivity.class.getDeclaredField("scheduleSync");hostField.setAccessible(true);syncField.setAccessible(true);
+            DeviceHostRuntime host=(DeviceHostRuntime)hostField.get(activity);ScheduleSync sync=(ScheduleSync)syncField.get(activity);
+            String backend=InstrumentationRegistry.getArguments().getString("backend_url","");
+            String callback=InstrumentationRegistry.getArguments().getString("callback_origin","");
+            boolean live=!backend.isEmpty()&&link.startsWith(ServerAddress.normalize(backend));
+            if(live){assertFalse("Live pairing needs an adb-forwarded callback_origin",callback.isEmpty());assertEquals("Forwarded device port must match the running endpoint",43127,host.port());}
+            final String returnOrigin=live?callback:"http://127.0.0.1:"+host.port();sync.setReturnOrigin(()->returnOrigin);
+            activity.handleScanResult(link);
+        }catch(ReflectiveOperationException error){throw new AssertionError(error);}});
+        clickDialogButton("同意配对并共享日程");
+    }
+    private void clickDialogButton(String label) {
+        waitUntil("The native confirmation must offer "+label,()->{
+            android.view.accessibility.AccessibilityNodeInfo root=InstrumentationRegistry.getInstrumentation().getUiAutomation().getRootInActiveWindow();
+            if(root!=null)for(android.view.accessibility.AccessibilityNodeInfo node:root.findAccessibilityNodeInfosByText(label))if(label.contentEquals(node.getText()==null?"":node.getText())&&node.isClickable())return node.performAction(android.view.accessibility.AccessibilityNodeInfo.ACTION_CLICK);
+            return false;
         });
     }
-
     private String webTitle() {
         return read(a -> {
             WebView web = a.findViewById(R.id.web_view);
@@ -556,12 +416,16 @@ public class ConnectionInstrumentedTest {
     }
 
     private void captureWorkspaceScreenshot() {
+        captureScreenshot("android-workspace.png");
+    }
+
+    private void captureScreenshot(String filename) {
         Bitmap screenshot = InstrumentationRegistry.getInstrumentation().getUiAutomation().takeScreenshot();
         if (screenshot == null) return;
         Context context = InstrumentationRegistry.getInstrumentation().getTargetContext();
         File directory = context.getExternalFilesDir(null);
         if (directory == null) { screenshot.recycle(); return; }
-        try (FileOutputStream output = new FileOutputStream(new File(directory, "android-workspace.png"))) {
+        try (FileOutputStream output = new FileOutputStream(new File(directory, filename))) {
             screenshot.compress(Bitmap.CompressFormat.PNG, 100, output);
         } catch (IOException error) {
             // Screenshot evidence should not turn a passing business assertion into a storage failure.
@@ -593,54 +457,73 @@ public class ConnectionInstrumentedTest {
         volatile boolean blankPage;
         volatile boolean legacyRootOnly;
         private int port;
-        final AtomicInteger responses = new AtomicInteger();
+        TestPeer identity;
+        final String pairToken=PeerIdentity.challenge();
+        volatile String deviceToken=PeerIdentity.challenge();
+        final String pairingId=UUID.randomUUID().toString();
+        final AtomicInteger responses=new AtomicInteger(),redeems=new AtomicInteger(),mobileRequests=new AtomicInteger();
+        final java.util.List<String> authorizations=java.util.Collections.synchronizedList(new java.util.ArrayList<>());
+        final java.util.List<String> receivedRevisions=java.util.Collections.synchronizedList(new java.util.ArrayList<>());
+        final java.util.Map<String,JSONObject> events=new java.util.LinkedHashMap<>();
 
+        HttpFixture(){try{identity=new TestPeer();}catch(Exception error){throw new IllegalStateException(error);}}
         void start() throws IOException {
-            server = new ServerSocket();
-            server.setReuseAddress(true);
-            server.bind(new InetSocketAddress(InetAddress.getByName("127.0.0.1"), port));
-            port = server.getLocalPort();
-            running = true;
-            thread = new Thread(() -> {
-                while (running) {
-                    try (Socket connection = server.accept()) {
-                        connection.setSoTimeout(2000);
-                        BufferedReader input = new BufferedReader(new InputStreamReader(connection.getInputStream(), StandardCharsets.US_ASCII));
-                        String request = input.readLine();
-                        if (request == null) continue;
-                        for (String line; (line = input.readLine()) != null && !line.isEmpty();) {
-                            // Consume request headers before writing a deterministic HTTP response.
+            server=new ServerSocket();server.setReuseAddress(true);server.bind(new InetSocketAddress(InetAddress.getByName("127.0.0.1"),port));port=server.getLocalPort();running=true;
+            thread=new Thread(()->{
+                while(running){
+                    try(Socket connection=server.accept()){
+                        connection.setSoTimeout(3000);
+                        java.io.InputStream input=connection.getInputStream();java.io.ByteArrayOutputStream headerBytes=new java.io.ByteArrayOutputStream();int previous=0,current;
+                        while((current=input.read())!=-1){headerBytes.write(current);previous=((previous<<8)|current);if(previous==0x0d0a0d0a)break;if(headerBytes.size()>16384)throw new IOException("headers too large");}
+                        String[] lines=headerBytes.toString(StandardCharsets.US_ASCII.name()).split("\r\n");
+                        String[] request=lines[0].split(" ");String method=request[0],path=request[1];
+                        java.util.Map<String,String> headers=new java.util.HashMap<>();
+                        for(int i=1;i<lines.length;i++){int split=lines[i].indexOf(':');if(split>0)headers.put(lines[i].substring(0,split).toLowerCase(java.util.Locale.ROOT),lines[i].substring(split+1).trim());}
+                        int length=Integer.parseInt(headers.getOrDefault("content-length","0"));if(length>131072)throw new IOException("request too large");
+                        byte[] bytes=new byte[length];int offset=0;while(offset<length){int count=input.read(bytes,offset,length-offset);if(count<0)throw new IOException("truncated request");offset+=count;}
+                        JSONObject body=length==0?new JSONObject():new JSONObject(new String(bytes,StandardCharsets.UTF_8));
+                        String authorization=headers.get("authorization");if(authorization!=null)authorizations.add(authorization);
+                        JSONObject result=null;String cookie="";int status=200;
+                        if(path.startsWith("/api/devices/identity?")){
+                            android.net.Uri uri=android.net.Uri.parse("http://fixture"+path);result=identity.proof(uri.getQueryParameter("challenge"),uri.getQueryParameter("device_id"));
+                        }else if(path.equals("/api/pairing/redeem")){
+                            if(!pairToken.equals(body.optString("token"))){status=400;result=new JSONObject().put("error",new JSONObject().put("message","配对码无效"));}
+                            else{redeems.incrementAndGet();deviceToken=PeerIdentity.challenge();result=identity.proof(body.getString("challenge"),body.getString("device_id")).put("device_token",deviceToken).put("pairing_id",pairingId).put("legacy_space_ids",new org.json.JSONArray().put(identity.spaceId));}
+                        }else if(path.startsWith("/api/")){
+                            if(!("Bearer "+deviceToken).equals(authorization)){status=401;result=new JSONObject().put("error",new JSONObject().put("message","设备配对失效"));}
+                            else if(path.equals("/api/devices/info"))result=identity.context().put("peer",new JSONObject().put("id",pairingId));
+                            else if(path.equals("/api/devices/web-session")){result=identity.context();cookie="Set-Cookie: fixture_device="+deviceToken+"; Path=/; HttpOnly; SameSite=Lax\r\n";}
+                            else if(path.startsWith("/api/devices/")&&method.equals("DELETE")){result=new JSONObject().put("revoked",true);deviceToken="revoked";}
+                            else if(path.equals("/api/replica/exchange"))result=sync(body);
+                            else{status=404;result=new JSONObject();}
                         }
-                        boolean missingMobile = legacyRootOnly && request.startsWith("GET /mobile");
-                        byte[] body = (missingMobile ? "<!doctype html><title>Not found</title><body>Not found</body>" : blankPage ? "<!doctype html><title>Empty fixture</title><body></body>" : "<!doctype html><meta charset=utf-8><title>Fixture ready</title>"
-                                + "<h1>Local test fixture</h1><script>window.receivedFragment=location.hash;history.replaceState(null,'',location.pathname);localStorage.setItem('fixture','ready')</script>")
-                                .getBytes(StandardCharsets.UTF_8);
-                        String headers = (missingMobile ? "HTTP/1.1 404 Not Found\r\n" : "HTTP/1.1 200 OK\r\n") + "Content-Type: text/html; charset=utf-8\r\n"
-                                + "Cache-Control: no-store\r\nConnection: close\r\nContent-Length: " + body.length + "\r\n\r\n";
-                        connection.getOutputStream().write(headers.getBytes(StandardCharsets.US_ASCII));
-                        connection.getOutputStream().write(body);
-                        connection.getOutputStream().flush();
-                        responses.incrementAndGet();
-                    } catch (IOException ignored) {
-                        if (!running) return;
-                    }
+                        byte[] response;
+                        String contentType;
+                        if(result!=null){response=result.toString().getBytes(StandardCharsets.UTF_8);contentType="application/json";}
+                        else{
+                            mobileRequests.incrementAndGet();boolean missing=legacyRootOnly&&path.startsWith("/mobile");if(missing)status=404;
+                            response=(missing?"<!doctype html><title>Not found</title><body>Not found</body>":blankPage?"<!doctype html><title>Empty fixture</title><body></body>":"<!doctype html><meta charset=utf-8><title>Fixture ready</title><h1>Local test fixture</h1><script>window.receivedFragment=location.hash;history.replaceState(null,'',location.pathname);localStorage.setItem('fixture','ready')</script>").getBytes(StandardCharsets.UTF_8);contentType="text/html; charset=utf-8";
+                        }
+                        String responseHeaders="HTTP/1.1 "+status+" OK\r\nContent-Type: "+contentType+"\r\n"+cookie+"Cache-Control: no-store\r\nConnection: close\r\nContent-Length: "+response.length+"\r\n\r\n";
+                        connection.getOutputStream().write(responseHeaders.getBytes(StandardCharsets.US_ASCII));connection.getOutputStream().write(response);connection.getOutputStream().flush();responses.incrementAndGet();
+                    }catch(Exception ignored){if(!running)return;}
                 }
-            }, "android-test-http");
-            thread.setDaemon(true);
-            thread.start();
+            },"android-paired-device-fixture");thread.setDaemon(true);thread.start();
         }
-
-        String origin() { return "http://127.0.0.1:" + port; }
-
-        void stop() throws IOException {
-            running = false;
-            if (server != null) server.close();
-            if (thread != null) {
-                try { thread.join(2000); }
-                catch (InterruptedException interrupted) { Thread.currentThread().interrupt(); }
+        private JSONObject sync(JSONObject body)throws Exception{
+            org.json.JSONArray incoming=body.getJSONArray("records");assertTrue(incoming.length()<=50);
+            for(int i=0;i<incoming.length();i++){
+                JSONObject record=AncestryReplica.record(incoming.getJSONObject(i));String id=record.getString("id");
+                org.json.JSONArray heads=record.getJSONArray("heads");for(int j=0;j<heads.length();j++)receivedRevisions.add(heads.getJSONObject(j).getString("revision_id"));
+                events.put(id,AncestryReplica.merge(events.get(id),record));
             }
+            org.json.JSONArray page=new org.json.JSONArray();String after=body.optString("after","");
+            for(String id:new java.util.TreeSet<>(events.keySet()))if(id.compareTo(after)>0)page.put(events.get(id));
+            return identity.context().put("records",page).put("has_more",false).put("next_cursor",JSONObject.NULL);
         }
-
-        @Override public void close() throws IOException { stop(); }
+        String origin(){return "http://127.0.0.1:"+port;}
+        void changeAddress()throws IOException{stop();port=0;start();}
+        void stop()throws IOException{running=false;if(server!=null)server.close();if(thread!=null)try{thread.join(3000);}catch(InterruptedException error){Thread.currentThread().interrupt();}}
+        @Override public void close()throws IOException{stop();}
     }
 }

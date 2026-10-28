@@ -29,7 +29,6 @@ import {
   KeyRound,
   LayoutDashboard,
   LoaderCircle,
-  LogOut,
   Menu,
   Plus,
   RefreshCw,
@@ -49,6 +48,8 @@ import type {
   ModelSettingsInfo,
 } from "@/lib/types";
 import ModelSettingsPanel from "@/components/model-settings";
+import DeviceConnections from "@/components/device-connections";
+import ReplicaConflict from "@/components/replica-conflict";
 import { loadEditorDraft, loadReviewDraft, saveLocalDraft } from "@/components/draft-storage";
 import { commitSchema } from "@/lib/schemas";
 import {
@@ -76,25 +77,28 @@ const EMPTY_SESSION: SessionInfo = {
   ai_provider: "rules",
 };
 
-// StrictMode can mount twice. Share only the in-flight exchange so a one-use
-// code is never redeemed twice, and erase the fragment before any API request.
-let pairingBootstrap: Promise<SessionInfo> | null = null;
-function bootstrapSession(): Promise<SessionInfo> {
-  if (pairingBootstrap) return pairingBootstrap;
+function takePairingTicket(): string | null {
   const fragment = window.location.hash;
-  if (!fragment.startsWith("#pair=")) return api<SessionInfo>("/api/auth/session");
+  if (!fragment.startsWith("#pair=")) return null;
   window.history.replaceState(null, "", window.location.pathname + window.location.search);
   const token = fragment.slice(6);
   if (!/^[A-Za-z0-9_-]{43}$/.test(token))
-    return Promise.reject(new Error("登录二维码格式无效，请在电脑端重新生成。"));
-  const exchange = api<SessionInfo>("/api/pairing/redeem", {
-    method: "POST", body: JSON.stringify({ token }),
-  });
-  pairingBootstrap = exchange;
-  void exchange.finally(() => {
-    if (pairingBootstrap === exchange) pairingBootstrap = null;
-  }).catch(() => {});
-  return exchange;
+    throw new ApiError("INVALID_PAIRING", "配对二维码格式无效，请在另一台设备重新生成。", 400);
+  return token;
+}
+
+function hasReplicaConflict(event: ScheduleEvent | undefined): boolean {
+  return (event?.replica_conflicts?.length ?? 0) > 1;
+}
+
+function browserPairingIdentity() {
+  let id: string | null = null;
+  try { id = localStorage.getItem("shunshoupai-browser-device-id"); } catch { /* Cookie still identifies this connection. */ }
+  if (!id || !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id)) {
+    id = requestId();
+    try { localStorage.setItem("shunshoupai-browser-device-id", id); } catch { /* Pairing can continue without local storage. */ }
+  }
+  return { device_id: id, device_name: "网页设备", platform: "web" };
 }
 
 function Brand({ small = false }: { small?: boolean }) {
@@ -188,118 +192,40 @@ function Modal({
   );
 }
 
-function AuthModal({
-  close,
-  onSuccess,
-  mode,
-}: {
+function PairingModal({ close, token, onConnected }: {
   close: () => void;
-  onSuccess: (session: SessionInfo) => void;
-  mode: string;
+  token: string | null;
+  onConnected: (session: SessionInfo) => void;
 }) {
-  const [register, setRegister] = useState(false);
-  const [email, setEmail] = useState("");
-  const [password, setPassword] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
-  const [message, setMessage] = useState("");
-  async function submit(e: FormEvent) {
-    e.preventDefault();
-    setBusy(true);
-    setError("");
-    setMessage("");
+  const action = useRef(false);
+  const requestClose = useCallback(() => { if (!action.current) close(); }, [close]);
+  async function connect() {
+    if (!token || action.current) return;
+    action.current = true; setBusy(true); setError("");
     try {
-      const result = await api<SessionInfo & { message?: string }>(
-        `/api/auth/${register ? "register" : "login"}`,
-        { method: "POST", body: JSON.stringify({ email, password }) },
-      );
-      if (result.user) {
-        onSuccess(result);
-        close();
-      } else
-        setMessage(result.message || "注册成功，请检查邮箱完成验证后登录。");
-    } catch (error) {
-      setError(errorMessage(error));
-    } finally {
-      setBusy(false);
-    }
+      const result = await api<SessionInfo>("/api/pairing/redeem", {
+        method: "POST", body: JSON.stringify({ token, ...browserPairingIdentity() }),
+      });
+      const session = { ...result };
+      Reflect.deleteProperty(session, "device_token");
+      onConnected(session);
+    } catch (failure) { setError(errorMessage(failure)); }
+    finally { action.current = false; setBusy(false); }
   }
   return (
-    <Modal
-      title={register ? "给日程一个新家" : "欢迎回来"}
-      subtitle="登录同一账号，在手机和电脑接着安排。"
-      close={close}
-    >
-      <div className="auth-tabs">
-        <button
-          className={!register ? "active" : ""}
-          onClick={() => {
-            setRegister(false);
-            setError("");
-            setMessage("");
-          }}
-        >
-          登录账号
-        </button>
-        <button
-          className={register ? "active" : ""}
-          onClick={() => {
-            setRegister(true);
-            setError("");
-            setMessage("");
-          }}
-        >
-          注册账号
-        </button>
+    <Modal title="连接你的设备" subtitle="电脑和手机都可互相配对，无需账号或密码。" close={requestClose}>
+      {!token && <>
+        <div className="guide-step"><span>1</span><div><h3>另一台设备显示配对码</h3><p>打开顺手排，在「设备与同步」中显示一次性二维码或复制配对链接。</p></div></div>
+        <div className="guide-step"><span>2</span><div><h3>扫码或粘贴配对链接</h3><p>两台设备连接同一个可信局域网，手机保持应用在前台以便被连接。</p></div></div>
+      </>}
+      <div className="inline-info pairing-consent">配对会共享本机全部日程及未来修改，也可能经对方传到它已配对的其他设备。解除配对只停止后续连接，无法撤回已传播的副本。模型密钥不会随日程传播。</div>
+      {error && <div className="inline-error" role="alert">{error}</div>}
+      <div className="modal-actions">
+        {token && <button className="secondary-button" disabled={busy} onClick={requestClose}>暂不配对</button>}
+        <button className="primary-button" disabled={busy} onClick={token ? () => void connect() : requestClose}>{busy ? "正在配对…" : token ? "同意配对并共享日程" : "知道了"}</button>
       </div>
-      <form onSubmit={submit} className="form-stack">
-        <label>
-          邮箱
-          <input
-            type="email"
-            autoComplete="email"
-            placeholder="you@example.com"
-            value={email}
-            onChange={(e) => setEmail(e.target.value)}
-            required
-            maxLength={254}
-          />
-        </label>
-        <label>
-          密码
-          <input
-            type="password"
-            autoComplete={register ? "new-password" : "current-password"}
-            placeholder="至少 8 个字符"
-            minLength={8}
-            maxLength={128}
-            value={password}
-            onChange={(e) => setPassword(e.target.value)}
-            required
-          />
-        </label>
-        {error && (
-          <div className="inline-error" role="alert">
-            {error}
-          </div>
-        )}
-        {message && (
-          <div className="inline-info" role="status">
-            {message}
-          </div>
-        )}
-        <button className="primary-button wide" disabled={busy}>
-          {busy ? <LoaderCircle className="spin" size={17} /> : null}
-          {register ? "创建账号" : "登录，继续安排"}
-          <ArrowRight size={17} />
-        </button>
-      </form>
-      <p className="auth-note">
-        <ShieldCheck size={14} />
-        {mode === "supabase"
-          ? "由 Supabase 提供身份认证与数据隔离"
-          : "本地服务账号 · 数据保存在当前服务端"}
-      </p>
     </Modal>
   );
 }
@@ -312,6 +238,7 @@ function EventEditor({
   save,
   busy,
   storageKey,
+  resolveConflict,
 }: {
   event?: ScheduleEvent;
   latestEvent?: ScheduleEvent;
@@ -320,11 +247,13 @@ function EventEditor({
   save: (draft: EventDraft, baseVersion: number) => Promise<void>;
   busy: boolean;
   storageKey: string;
+  resolveConflict: () => void;
 }) {
   const [restored] = useState(() => loadEditorDraft(storageKey));
   const [baseVersion, setBaseVersion] = useState(restored?.baseVersion ?? event?.version ?? 0);
   const latest = latestEvent ?? event;
   const stale = !!latest && baseVersion !== latest.version;
+  const unresolved = hasReplicaConflict(latest);
   const [title, setTitle] = useState(restored?.title ?? event?.title ?? "");
   const [start, setStart] = useState(
     restored?.start ?? (event ? localInput(event.start_at) : `${day}T09:00`),
@@ -411,7 +340,8 @@ function EventEditor({
             ? "此设备暂时无法保留草稿，请勿刷新或关闭页面。"
             : "输入自动保存在此设备，确认保存后同步。时间采用上海时区（UTC+8）。"}
         </p>
-        {stale && latest && (
+        {unresolved && <div className="inline-info">这项日程还有不同设备的并发版本。你的编辑稿已保留，请先处理版本冲突。<button type="button" className="text-button" disabled={busy} onClick={resolveConflict}>处理版本冲突</button></div>}
+        {stale && latest && !unresolved && (
           <div className="inline-info editor-conflict" role="status">
             <strong>另一端已更新这项日程，你的编辑草稿仍然保留。</strong>
             <p>另一端：{latest.title}<br />
@@ -447,7 +377,7 @@ function EventEditor({
           }}>
             放弃编辑
           </button>
-          <button className="primary-button" disabled={busy || stale}>
+          <button className="primary-button" disabled={busy || stale || unresolved}>
             {busy ? (
               <LoaderCircle className="spin" size={16} />
             ) : (
@@ -464,7 +394,9 @@ function EventEditor({
 export default function Dashboard({ initialDay }: { initialDay: string }) {
   const [session, setSession] = useState<SessionInfo>(EMPTY_SESSION);
   const [ready, setReady] = useState(false);
-  const [authOpen, setAuthOpen] = useState(false);
+  const [pairingOpen, setPairingOpen] = useState(false);
+  const [pairingTicket, setPairingTicket] = useState<string | null>(null);
+  const [conflictEvent, setConflictEvent] = useState<ScheduleEvent | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [modelSettingsOpen, setModelSettingsOpen] = useState(false);
   const [modelSettings, setModelSettings] = useState<ModelSettingsInfo | null>(
@@ -504,11 +436,13 @@ export default function Dashboard({ initialDay }: { initialDay: string }) {
   const sessionRequest = useRef<Promise<void> | null>(null);
   const refreshing = useRef<{ key: string; request: number } | null>(null);
   const userId = session.user?.id;
+  const deviceName = session.peer?.name || session.device?.name || "我的设备";
   const draftKey = `shunshoupai-draft-${userId || "guest"}`;
   const pendingKey = `shunshoupai-pending-${userId || "guest"}`;
   const reviewKey = `shunshoupai-review-${userId || "guest"}`;
   const editorKey = `shunshoupai-editor-${userId || "guest"}-${editor && editor !== "new" ? editor.id : "new"}`;
-  const closeAuth = useCallback(() => setAuthOpen(false), []);
+  const closePairing = useCallback(() => { setPairingOpen(false); setPairingTicket(null); }, []);
+  const closeConflict = useCallback(() => { if (!actionLock.current) setConflictEvent(null); }, []);
   const closeSettings = useCallback(() => setSettingsOpen(false), []);
   const closeModelSettings = useCallback(() => setModelSettingsOpen(false), []);
   const closeHelp = useCallback(() => setHelpOpen(false), []);
@@ -561,14 +495,14 @@ export default function Dashboard({ initialDay }: { initialDay: string }) {
   const restoreSession = useCallback(() => {
     if (sessionRequest.current) return sessionRequest.current;
     const epoch = authEpoch.current;
-    const request = bootstrapSession()
+    const request = api<SessionInfo>("/api/auth/session")
       .then((data) => {
         if (epoch !== authEpoch.current) return;
         sessionRetry.current = false;
         userRef.current = data.user?.id || null;
         setSession(data);
         setSyncError("");
-        if (data.pairing_limited) setNotice({ kind: "info", text: `扫码临时授权有效至 ${data.session_expires_at || "当前会话到期"}；到期后重新扫码或密码登录。` });
+
       })
       .catch((error) => {
         if (epoch !== authEpoch.current) return;
@@ -615,9 +549,9 @@ export default function Dashboard({ initialDay }: { initialDay: string }) {
         if (error instanceof ApiError && error.status === 401) {
           authEpoch.current++;
           userRef.current = null;
-          setSession((s) => ({ ...s, user: null }));
+          setSession((s) => ({ ...s, user: null, peer: undefined, role: undefined }));
           setEvents([]);
-          setNotice({ kind: "info", text: "登录已过期，请重新登录后继续。" });
+          setNotice({ kind: "info", text: "设备连接已失效，请重新扫码配对。你的草稿仍保留。" });
         }
       } finally {
         if (refreshing.current?.request === requestNumber) refreshing.current = null;
@@ -628,6 +562,10 @@ export default function Dashboard({ initialDay }: { initialDay: string }) {
   );
 
   useEffect(() => {
+    try {
+      const ticket = takePairingTicket();
+      if (ticket) { setPairingTicket(ticket); setPairingOpen(true); }
+    } catch (failure) { setNotice({ kind: "info", text: errorMessage(failure) }); }
     void restoreSession();
     setOnline(navigator.onLine);
   }, [restoreSession]);
@@ -653,6 +591,7 @@ export default function Dashboard({ initialDay }: { initialDay: string }) {
     setModelSettingsOpen(false);
     setEditor(null);
     setDeleteEvent(null);
+    setConflictEvent(null);
     if (userId) {
       setParseResult(loadReviewDraft(reviewKey));
       try {
@@ -692,7 +631,8 @@ export default function Dashboard({ initialDay }: { initialDay: string }) {
         setText("");
       }
     }
-    // Session changes reset account-scoped data; provider is configuration, not an account boundary.
+    // Retain the existing space ID storage keys so pre-pairing upgrades keep drafts and request IDs.
+    // Provider changes are configuration changes, not a local data boundary.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [userId, draftKey, pendingKey, reviewKey]);
   useEffect(() => {
@@ -772,41 +712,37 @@ export default function Dashboard({ initialDay }: { initialDay: string }) {
     setParseResult(result);
     saveLocalDraft(reviewKey, result);
   }
-  function requireAuth() {
+  function requireConnection() {
     if (userId) return true;
-    setAuthOpen(true);
+    setPairingOpen(true);
     return false;
   }
-  function onLogin(data: SessionInfo) {
+  function onConnected(data: SessionInfo) {
     authEpoch.current++;
     sessionRetry.current = false;
     userRef.current = data.user?.id || null;
     setSession(data);
-    setNotice({ kind: "success", text: "登录成功，接着安排你的生活吧。" });
+    setSyncError("");
+    closePairing();
+    setNotice({ kind: "success", text: "配对完成，日程会在设备可达时自动合并。" });
   }
-  async function logout() {
-    if (actionLock.current || parsing) return;
-    try {
-      await api("/api/auth/logout", { method: "POST", body: "{}" });
-      authEpoch.current++;
-      sessionRetry.current = false;
-      userRef.current = null;
-      sequence.current++;
-      setSession((s) => ({ ...s, user: null }));
-      setEvents([]);
-      setSettingsOpen(false);
-      setModelSettingsOpen(false);
-      setEditor(null);
-      setNotice({ kind: "info", text: "已退出登录。" });
-    } catch (error) {
-      setNotice({ kind: "error", text: errorMessage(error) });
-    }
+  function onDisconnected() {
+    authEpoch.current++;
+    sessionRetry.current = false;
+    userRef.current = null;
+    sequence.current++;
+    setSession((s) => ({ ...s, user: null, peer: undefined, role: undefined }));
+    setEvents([]);
+    setSettingsOpen(false);
+    setModelSettingsOpen(false);
+    setEditor(null);
+    setNotice({ kind: "info", text: "已解除配对，已保存在设备上的日程和草稿仍保留。" });
   }
   async function parse() {
     if (
       actionLock.current ||
       uncertain ||
-      !requireAuth() ||
+      !requireConnection() ||
       parsing ||
       !text.trim()
     )
@@ -863,7 +799,7 @@ export default function Dashboard({ initialDay }: { initialDay: string }) {
     );
   }
   async function commitDrafts() {
-    if (parsing || !parseResult?.events.length || actionLock.current || !requireAuth())
+    if (parsing || !parseResult?.events.length || actionLock.current || !requireConnection())
       return;
     if (!online) {
       setCommitError(
@@ -935,7 +871,7 @@ export default function Dashboard({ initialDay }: { initialDay: string }) {
       } else {
         setUncertain(true);
         setCommitError(
-          "保存状态待确认：服务端可能已收到请求。请点击「核实并重试」，应用会沿用原请求编号，避免重复创建。",
+          "保存状态待确认：请求可能已完成。请点击「核实并重试」，应用会沿用原请求编号，避免重复创建。",
         );
       }
     } finally {
@@ -1100,7 +1036,7 @@ export default function Dashboard({ initialDay }: { initialDay: string }) {
     setMobileNav(false);
   }
   function addNew() {
-    if (!requireAuth()) return;
+    if (!requireConnection()) return;
     if (uncertain) {
       setNotice({
         kind: "info",
@@ -1210,27 +1146,23 @@ export default function Dashboard({ initialDay }: { initialDay: string }) {
           </button>
           <button className="nav-item" onClick={() => setSettingsOpen(true)}>
             <Settings2 size={18} />
-            偏好与账号
+            设备与同步
           </button>
           <div className="user-box">
             <span className="avatar">
-              {session.user
-                ? session.user.email.slice(0, 1).toUpperCase()
-                : "S"}
+              {deviceName.slice(0, 1)}
             </span>
             <div>
               <strong>
-                {session.user
-                  ? session.user.email.split("@")[0]
-                  : "你的日程，有处安放"}
+                {session.user ? deviceName : "连接后接着安排"}
               </strong>
-              <span>{session.user ? "个人账号" : "登录后开启跨端同步"}</span>
+              <span>{session.user ? "设备日程" : "扫码配对，无需账号"}</span>
             </div>
             <button
               className="icon-button"
-              aria-label={session.user ? "账号设置" : "登录账号"}
+              aria-label={session.user ? "设备设置" : "配对说明"}
               onClick={() =>
-                session.user ? setSettingsOpen(true) : setAuthOpen(true)
+                session.user ? setSettingsOpen(true) : setPairingOpen(true)
               }
             >
               {session.user ? (
@@ -1268,8 +1200,8 @@ export default function Dashboard({ initialDay }: { initialDay: string }) {
               title={
                 syncError ||
                 (lastSync
-                  ? `最后同步 ${clockTime(lastSync.toISOString())}，前台每 8 秒刷新`
-                  : "登录后同步日程")
+                  ? `当前日程连接正常，最后读取 ${clockTime(lastSync.toISOString())}。各设备的合并状态请查看“设备与同步”。`
+                  : "配对后同步日程")
               }
             >
               {!online ? (
@@ -1283,14 +1215,14 @@ export default function Dashboard({ initialDay }: { initialDay: string }) {
                 {!online
                   ? "当前离线"
                   : syncing
-                    ? "正在同步"
+                    ? "正在读取"
                     : syncError
-                      ? "同步待恢复"
+                      ? "连接待恢复"
                       : userId && lastSync
-                        ? "已同步"
-                        : "跨端接着用"}
+                        ? "连接正常"
+                        : "尚未配对"}
               </span>
-              {online && !syncError && <i />}
+              {online && !syncError && userId && <i />}
             </span>
             <span className="topbar-divider" />
             <button
@@ -1303,15 +1235,13 @@ export default function Dashboard({ initialDay }: { initialDay: string }) {
             </button>
             <button
               className="avatar avatar-small"
-              title={session.user?.email || "登录账号"}
-              aria-label={session.user ? "打开账号设置" : "登录账号"}
+              title={session.user ? deviceName : "配对说明"}
+              aria-label={session.user ? "打开设备与同步" : "配对说明"}
               onClick={() =>
-                session.user ? setSettingsOpen(true) : setAuthOpen(true)
+                session.user ? setSettingsOpen(true) : setPairingOpen(true)
               }
             >
-              {session.user
-                ? session.user.email.slice(0, 1).toUpperCase()
-                : "S"}
+              {deviceName.slice(0, 1)}
             </button>
           </div>
         </header>
@@ -1348,7 +1278,7 @@ export default function Dashboard({ initialDay }: { initialDay: string }) {
               <CloudOff size={17} />
               <span>
                 {!online
-                  ? "网络已断开。输入会保留，尚未联网的更改不会显示为已同步。"
+                  ? "网络已断开。输入会保留，恢复连接后可继续。各设备的合并状态请查看“设备与同步”。"
                   : syncError}
               </span>
               <button onClick={() => void refresh()}>重新同步</button>
@@ -1639,7 +1569,7 @@ export default function Dashboard({ initialDay }: { initialDay: string }) {
                     <span>03</span>
                     <div>
                       <strong>确认后，各端接着用</strong>
-                      <p>同一账号，手机电脑共享日程</p>
+                      <p>配对一次，连接时自动同步</p>
                     </div>
                   </div>
                   <div className="device-note">
@@ -1788,16 +1718,18 @@ export default function Dashboard({ initialDay }: { initialDay: string }) {
                       <h3>
                         {query
                           ? "暂时没找到这项安排"
-                          : view === "completed"
-                            ? "每完成一件事，就在这里留个脚印"
-                            : "时间留白，好事正要发生"}
+                          : !userId
+                            ? "你的日程，留在自己的设备"
+                            : view === "completed"
+                              ? "每完成一件事，就在这里留个脚印"
+                              : "时间留白，好事正要发生"}
                       </h3>
                       <p>
                         {query
                           ? "试试其他关键词，或切换日期范围。"
                           : session.user
                             ? "写下第一件想做的事，给今天一个小小的开始。"
-                            : "先写下一段安排，登录后就能保存并跨端继续。"}
+                            : "手机应用可直接记录日程；配对后，这里会显示设备间的安排。"}
                       </p>
                       <button
                         className="empty-action"
@@ -1806,14 +1738,14 @@ export default function Dashboard({ initialDay }: { initialDay: string }) {
                             ? setQuery("")
                             : session.user
                               ? addNew()
-                              : setAuthOpen(true)
+                              : setPairingOpen(true)
                         }
                       >
                         {query
                           ? "清空搜索"
                           : session.user
                             ? "添加第一项日程"
-                            : "登录，开启我的日程"}
+                            : "如何连接设备"}
                         <ArrowRight size={14} />
                       </button>
                     </div>
@@ -1825,6 +1757,7 @@ export default function Dashboard({ initialDay }: { initialDay: string }) {
                           60000,
                       );
                       const completed = event.status === "completed";
+                      const conflicted = hasReplicaConflict(event);
                       return (
                         <article
                           className={`event-row ${completed ? "event-completed" : ""}`}
@@ -1851,7 +1784,7 @@ export default function Dashboard({ initialDay }: { initialDay: string }) {
                             <div className="event-main">
                               <button
                                 className={`complete-button ${completed ? "is-complete" : ""}`}
-                                disabled={saving}
+                                disabled={saving || conflicted}
                                 aria-label={`${completed ? "恢复" : "完成"}日程：${event.title}`}
                                 onClick={() => void changeStatus(event)}
                               >
@@ -1863,6 +1796,7 @@ export default function Dashboard({ initialDay }: { initialDay: string }) {
                               </button>
                               <h3>{event.title}</h3>
                             </div>
+                            {conflicted && <button className="replica-conflict-entry" disabled={saving} aria-label={`处理版本冲突：${event.title}`} onClick={() => setConflictEvent(event)}>{event.replica_conflicts!.length} 个不同版本 · 选择要保留的内容</button>}
                             <div className="event-details">
                               <span>
                                 <Clock3 size={12} />
@@ -1874,7 +1808,7 @@ export default function Dashboard({ initialDay }: { initialDay: string }) {
                               <div className="event-row-actions">
                                 <button
                                   className="icon-button"
-                                  disabled={saving}
+                                  disabled={saving || conflicted}
                                   aria-label={`编辑日程：${event.title}`}
                                   onClick={() => setEditor(event)}
                                 >
@@ -1882,7 +1816,7 @@ export default function Dashboard({ initialDay }: { initialDay: string }) {
                                 </button>
                                 <button
                                   className="icon-button delete-button"
-                                  disabled={saving}
+                                  disabled={saving || conflicted}
                                   aria-label={`删除日程：${event.title}`}
                                   onClick={() => setDeleteEvent(event)}
                                 >
@@ -1930,9 +1864,7 @@ export default function Dashboard({ initialDay }: { initialDay: string }) {
             <Brand small />
             <span>把想法排进生活，把时间还给自己。</span>
             <span className="footer-mode">
-              {session.mode === "supabase"
-                ? "Supabase 云端模式"
-                : "本地持久化模式"}{" "}
+              设备本地保存{" "}
               <span>·</span> 前台 8 秒同步
             </span>
           </footer>
@@ -1960,8 +1892,17 @@ export default function Dashboard({ initialDay }: { initialDay: string }) {
           </button>
         </div>
       )}
-      {authOpen && (
-        <AuthModal close={closeAuth} onSuccess={onLogin} mode={session.mode} />
+      {pairingOpen && (
+        <PairingModal close={closePairing} token={pairingTicket} onConnected={onConnected} />
+      )}
+      {conflictEvent && (
+        <Modal title="处理版本冲突" subtitle="每份修改都保留，最终内容由你选择。" close={closeConflict} wide>
+          <ReplicaConflict eventId={conflictEvent.id} onBusyChange={(busy) => { actionLock.current = busy; setSaving(busy); }} onResolved={() => {
+            setConflictEvent(null);
+            void refresh();
+            setNotice({ kind: "success", text: "日程版本已更新，其他设备连接后会收到结果。" });
+          }} />
+        </Modal>
       )}
       {editor && (
         <EventEditor
@@ -1973,6 +1914,9 @@ export default function Dashboard({ initialDay }: { initialDay: string }) {
           save={saveEditor}
           busy={saving}
           storageKey={editorKey}
+          resolveConflict={() => {
+            if (editor !== "new") { setConflictEvent(editor); setEditor(null); }
+          }}
         />
       )}
       {deleteEvent && (
@@ -2006,21 +1950,19 @@ export default function Dashboard({ initialDay }: { initialDay: string }) {
       )}
       {settingsOpen && (
         <Modal
-          title="照自己的步调来"
-          subtitle="日程和账号，只属于你。"
+          title="设备与同步"
+          subtitle="日程保存在你的设备，连接时自动合并。"
           close={closeSettings}
         >
           <div className="settings-list">
             <div>
-              <span>当前账号</span>
-              <strong>{session.user?.email || "尚未登录"}</strong>
+              <span>当前设备</span>
+              <strong>{session.user ? deviceName : "尚未配对"}</strong>
             </div>
             <div>
               <span>数据存储</span>
               <strong>
-                {session.mode === "supabase"
-                  ? "Supabase 云端数据库"
-                  : "当前服务端 SQLite 数据库"}
+                {session.device?.name ? `${session.device.name} · 本机保存` : "各设备独立保存"}
               </strong>
             </div>
             <div>
@@ -2029,7 +1971,7 @@ export default function Dashboard({ initialDay }: { initialDay: string }) {
                 {session.ai_provider === "model"
                   ? modelSettings?.effective_source === "personal"
                     ? "个人模型（已配置）"
-                    : "服务端模型（已配置）"
+                    : "设备默认模型（已配置）"
                   : "有限规则解析（未接模型）"}
               </strong>
             </div>
@@ -2075,28 +2017,17 @@ export default function Dashboard({ initialDay }: { initialDay: string }) {
             <ArrowRight size={15} />
           </button>
           <p className="settings-note">
-            提醒需要页面在前台活跃运行；锁屏、后台或关闭网页时，不提供系统级准点提醒。同一服务地址、同一账号可跨设备使用，日程在前台每
+            提醒需要页面在前台活跃运行；锁屏、后台或关闭网页时，不提供系统级准点提醒。配对设备连接时，网页日程在前台每
             8 秒和回到页面时刷新。
           </p>
           {session.user ? (
-            <button
-              className="secondary-button wide"
-              disabled={saving || parsing}
-              onClick={() => void logout()}
-            >
-              <LogOut size={16} />
-              退出账号
-            </button>
+            <DeviceConnections role={session.role} onDisconnected={onDisconnected} />
           ) : (
-            <button
-              className="primary-button wide"
-              onClick={() => {
-                setSettingsOpen(false);
-                setAuthOpen(true);
-              }}
-            >
-              登录账号
-              <ArrowRight size={16} />
+            <button className="primary-button wide" onClick={() => {
+              setSettingsOpen(false);
+              setPairingOpen(true);
+            }}>
+              如何连接设备<ArrowRight size={16} />
             </button>
           )}
         </Modal>
@@ -2104,7 +2035,7 @@ export default function Dashboard({ initialDay }: { initialDay: string }) {
       {modelSettingsOpen && userId && (
         <Modal
           title="模型设置"
-          subtitle="用自己的模型整理日程，网页和安卓端共用同一份账号配置。"
+          subtitle="用自己的模型整理日程，配置保存在当前连接的设备。"
           close={closeModelSettings}
           wide
         >
@@ -2153,7 +2084,7 @@ export default function Dashboard({ initialDay }: { initialDay: string }) {
             <div>
               <h3>确认，换端接着用</h3>
               <p>
-                确认后日程才会入库。两台设备访问同一个服务地址、登录同一账号，前台
+                确认后日程才会保存。设备完成一次配对后，在可连接时自动合并，网页前台
                 8 秒内自动刷新。
               </p>
             </div>
@@ -2161,7 +2092,7 @@ export default function Dashboard({ initialDay }: { initialDay: string }) {
           <div className="guide-boundaries">
             <strong>先把简单的事做好</strong>
             <p>
-              当前支持上海时区的单次日程。循环、全天、自动找空档、离线编辑和外部日历同步暂不支持。未配置模型时，使用明确标记的规则解析。
+              当前支持上海时区的单次日程。手机应用可离线编辑，连接设备后自动合并；此网页的智能整理需要设备在线。循环、全天、自动找空档和外部日历同步暂不支持。
             </p>
           </div>
           <a

@@ -56,9 +56,9 @@ export function buildConnectionInfo(requestUrl: string, options: ConnectionInfoO
     if (localOnlyHost(url.hostname)) return {
       current_origin: url.origin,
       candidates: [],
-      hint: "APP_ORIGIN 配置为本机地址，手机无法通过它连接。请管理员改为可访问的服务地址，或在局域网演示中留空。",
+      hint: "APP_ORIGIN 配置为本机地址，其他设备无法通过它连接。请管理员改为可访问的服务地址，或在局域网演示中留空。",
     };
-    return { current_origin: url.origin, candidates: [url.origin], hint: "使用已配置的服务地址。二维码只包含地址，扫码后仍需登录同一账号。" };
+    return { current_origin: url.origin, candidates: [url.origin], hint: "使用已配置的设备地址。连接地址本身不授予访问权限，请生成一次性设备配对码。" };
   }
   let current = parseHttpUrl(requestUrl);
   if (options.requestHost) {
@@ -71,12 +71,12 @@ export function buildConnectionInfo(requestUrl: string, options: ConnectionInfoO
   if (!localOnlyHost(current.hostname)) return {
     current_origin: currentOrigin,
     candidates: [currentOrigin],
-    hint: privateV4Rank(current.hostname) >= 0 ? "手机与电脑连接同一局域网后扫码，进入后登录同一账号。" : "二维码只包含当前服务地址，扫码后仍需登录同一账号。",
+    hint: privateV4Rank(current.hostname) >= 0 ? "两台设备连接同一局域网，扫描一次性配对码后自动同步。" : "请使用同一局域网内的设备地址，并通过一次性配对码建立连接。",
   };
   if ((options.storageMode ?? "local") !== "local") return {
     current_origin: currentOrigin,
     candidates: [],
-    hint: "当前地址指向电脑本机。请填写手机可以访问的局域网地址或已部署的 HTTPS 服务地址。",
+    hint: "当前地址指向电脑本机。请填写另一台设备可以访问的局域网地址或已部署的 HTTPS 服务地址。",
   };
   const interfaces = options.interfaces ?? networkInterfaces();
   const addresses = new Set<string>();
@@ -101,6 +101,6 @@ export function buildConnectionInfo(requestUrl: string, options: ConnectionInfoO
   return {
     current_origin: currentOrigin,
     candidates,
-    hint: candidates.length ? "已找到电脑的局域网地址。手机与电脑连接同一 Wi-Fi 后扫码；多张网卡时请选择手机可访问的地址。" : "当前地址只指向电脑本机，未找到可用局域网 IPv4。请手动填写电脑的局域网地址或已部署网址。",
+    hint: candidates.length ? "已找到电脑的局域网地址。两台设备连接同一 Wi-Fi 后扫码；多张网卡时请选择对方可访问的地址。" : "当前地址只指向电脑本机，未找到可用局域网 IPv4。请手动填写电脑的局域网地址或已部署网址。",
   };
 }
